@@ -3,305 +3,628 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Deep's To-Do</title>
+  <title>Stream</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet" />
   <style>
+    /* ── Tokens (light mode) ─────────────────────────────────── */
     :root {
-      --bg: #0f0f0f;
-      --surface: #1a1a1a;
-      --surface2: #242424;
-      --surface3: #2e2e2e;
-      --border: #2e2e2e;
-      --text: #e8e8e8;
-      --muted: #666;
-      --books: #7c9ff5;
-      --india-rci: #f57c7c;
-      --errands: #f5c97c;
-      --creative: #a8e6a3;
-      --misc: #c4a8e6;
+      --bg:           #f5f5f8;
+      --bg-raised:    #ffffff;
+      --surface:      #ffffff;
+      --surface-2:    #f0f0f4;
+      --surface-3:    #e8e8ed;
+      --border:       #e0e0e9;
+      --border-2:     #d0d0db;
+      --text:         #111118;
+      --text-2:       #6b6b80;
+      --text-3:       #a8a8bf;
+
+      --sidebar-bg:   #ececf0;
+      --sidebar-border: #e0e0e9;
+
+      --books:        #1d4ed8;
+      --india:        #b91c1c;
+      --errands:      #a16207;
+      --creative:     #15803d;
+      --misc:         #6d28d9;
+
+      --blue:         #2563eb;
+      --blue-dim:     rgba(37,99,235,.1);
+
+      --shadow-sm:    0 1px 2px rgba(0,0,0,.05);
+      --shadow:       0 2px 8px rgba(0,0,0,.08);
+      --shadow-lg:    0 8px 24px rgba(0,0,0,.12);
+
+      --sidebar-w:    212px;
+      --radius:       10px;
+      --radius-sm:    6px;
     }
-    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    /* ── Reset ────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { height: 100%; }
     body {
       background: var(--bg);
       color: var(--text);
-      font-family: 'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
       font-size: 14px;
-      min-height: 100vh;
-      padding: 32px 24px 120px;
+      line-height: 1.5;
+      min-height: 100%;
+      -webkit-font-smoothing: antialiased;
+    }
+    button { font-family: inherit; cursor: pointer; }
+
+    /* ── Layout ──────────────────────────────────────────────── */
+    .app { display: flex; min-height: 100vh; }
+
+    /* ── Sidebar ─────────────────────────────────────────────── */
+    .sidebar {
+      width: var(--sidebar-w);
+      flex-shrink: 0;
+      background: var(--sidebar-bg);
+      border-right: 1px solid var(--sidebar-border);
+      display: flex;
+      flex-direction: column;
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      overflow: hidden;
     }
 
-    /* ── Header ── */
-    header {
+    .sidebar-logo {
+      padding: 20px 16px 14px;
+      border-bottom: 1px solid var(--sidebar-border);
+    }
+    .sidebar-logo h1 { font-size: 15px; font-weight: 600; letter-spacing: -.2px; color: var(--text); }
+    .sidebar-logo .sub { font-size: 11px; color: var(--text-3); margin-top: 1px; }
+
+    .sidebar-nav { padding: 8px 6px; flex: 1; overflow-y: auto; }
+
+    .nav-label {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: .6px;
+      text-transform: uppercase;
+      color: var(--text-3);
+      padding: 6px 10px 4px;
+    }
+
+    .nav-item {
       display: flex;
       align-items: center;
-      gap: 12px;
-      margin-bottom: 36px;
-    }
-    header h1 { font-size: 22px; font-weight: 600; letter-spacing: -0.3px; }
-    #last-updated { font-size: 12px; color: var(--muted); flex: 1; }
-    .hdr-btn {
-      background: none;
-      border: 1px solid var(--border);
-      color: var(--muted);
-      padding: 5px 12px;
-      border-radius: 6px;
+      gap: 9px;
+      padding: 7px 10px;
+      border-radius: var(--radius-sm);
       cursor: pointer;
-      font-size: 12px;
-      transition: color .15s, border-color .15s, background .15s;
+      transition: background .1s;
+      color: var(--text-2);
+      font-size: 13px;
     }
-    .hdr-btn:hover { color: var(--text); border-color: #555; }
-    .hdr-btn.active {
-      background: #1e3060;
-      border-color: #7c9ff5;
-      color: #7c9ff5;
-    }
-
-    /* ── Upcoming strip ── */
-    #upcoming {
-      background: #111d35;
-      border: 1px solid #1e3060;
+    .nav-item:hover { background: rgba(0,0,0,.05); color: var(--text); }
+    .nav-item.active { background: rgba(0,0,0,.07); color: var(--text); font-weight: 500; }
+    .nav-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+    .nav-count {
+      margin-left: auto;
+      font-size: 11px;
+      color: var(--text-3);
+      background: rgba(0,0,0,.06);
+      padding: 1px 6px;
       border-radius: 10px;
-      padding: 12px 16px;
-      margin-bottom: 28px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .sidebar-footer {
+      padding: 10px 6px 14px;
+      border-top: 1px solid var(--sidebar-border);
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .footer-btn {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 7px 10px;
+      border-radius: var(--radius-sm);
+      border: none;
+      background: none;
+      color: var(--text-2);
+      font-size: 12px;
+      transition: background .1s, color .1s;
+      width: 100%;
+      text-align: left;
+    }
+    .footer-btn:hover { background: rgba(0,0,0,.05); color: var(--text); }
+    .footer-btn.active { background: var(--blue-dim); color: var(--blue); }
+    .footer-btn .btn-icon { font-size: 13px; width: 14px; text-align: center; }
+    #last-updated-sidebar { font-size: 10px; color: var(--text-3); padding: 2px 10px 6px; }
+
+    /* ── Main ────────────────────────────────────────────────── */
+    .main { flex: 1; min-width: 0; padding: 32px 40px 140px; }
+
+    /* ── Processing banner ───────────────────────────────────── */
+    #processing-banner {
       display: none;
+      align-items: center;
+      gap: 10px;
+      background: rgba(37,99,235,.07);
+      border: 1px solid rgba(37,99,235,.2);
+      border-radius: var(--radius);
+      padding: 9px 14px;
+      margin-bottom: 24px;
+      font-size: 12px;
+      color: var(--blue);
+      overflow: hidden;
+      position: relative;
     }
-    #upcoming h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .4px; color: #7c9ff5; margin-bottom: 8px; }
-    .upcoming-item { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 13px; }
-    .upcoming-time { font-size: 12px; color: #7c9ff5; min-width: 100px; font-variant-numeric: tabular-nums; }
-
-    /* ── Grid ── */
-    .sections {
-      display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-      gap: 20px;
-      margin-bottom: 40px;
+    #processing-banner.visible { display: flex; }
+    #processing-banner::after {
+      content: '';
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: linear-gradient(90deg, transparent 20%, rgba(37,99,235,.06) 50%, transparent 80%);
+      animation: shimmer 1.8s infinite;
     }
-    .section { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
-    .section-header { display: flex; align-items: center; gap: 8px; padding: 14px 16px 12px; border-bottom: 1px solid var(--border); }
-    .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
-    .section-header h2 { font-size: 13px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase; color: var(--muted); flex: 1; }
-    .count { font-size: 11px; color: var(--muted); background: var(--surface2); padding: 2px 7px; border-radius: 10px; }
-    .items { padding: 8px 0; min-height: 20px; }
+    @keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+    .processing-dot {
+      width: 6px; height: 6px; border-radius: 50%; background: var(--blue);
+      animation: pdot 1.4s ease-in-out infinite; flex-shrink: 0;
+    }
+    @keyframes pdot { 0%,100% { opacity:.35; transform:scale(.85); } 50% { opacity:1; transform:scale(1.1); } }
 
-    /* ── Item ── */
+    /* ── Upcoming timeline ───────────────────────────────────── */
+    #upcoming { display: none; margin-bottom: 28px; }
+    #upcoming.visible { display: block; }
+    .upcoming-label {
+      font-size: 10px; font-weight: 600; letter-spacing: .5px;
+      text-transform: uppercase; color: var(--text-3); margin-bottom: 10px;
+    }
+    .upcoming-track { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; }
+    .upcoming-track::-webkit-scrollbar { display: none; }
+    .upcoming-chip {
+      flex-shrink: 0;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 12px;
+      min-width: 130px;
+      max-width: 190px;
+      box-shadow: var(--shadow-sm);
+    }
+    .upcoming-chip-time { font-size: 11px; color: var(--blue); margin-bottom: 2px; font-variant-numeric: tabular-nums; }
+    .upcoming-chip-text { font-size: 12px; color: var(--text-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+    /* ── Section groups ──────────────────────────────────────── */
+    .section-group { margin-bottom: 28px; }
+    .section-group-header {
+      display: flex; align-items: center; gap: 8px;
+      margin-bottom: 2px; padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+    .section-dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+    .section-group-header h2 {
+      font-size: 11px; font-weight: 600; letter-spacing: .5px;
+      text-transform: uppercase; color: var(--text-3); flex: 1;
+    }
+    .section-badge { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
+    .empty-state { padding: 12px 2px; color: var(--text-3); font-size: 12px; }
+
+    /* ── Item rows ───────────────────────────────────────────── */
     .item {
       display: flex;
       align-items: flex-start;
-      gap: 10px;
-      padding: 9px 16px;
-      border-bottom: 1px solid var(--border);
+      gap: 8px;
+      padding: 9px 8px 9px 12px;
+      border-radius: var(--radius-sm);
       transition: background .1s;
       position: relative;
-    }
-    .item:last-child { border-bottom: none; }
-    .item:hover { background: var(--surface2); }
-    .item.drag-over { background: #1e3060; border-top: 2px solid #7c9ff5; }
-    .item.dragging { opacity: .4; }
-
-    /* drag handle */
-    .drag-handle {
-      display: none;
-      cursor: grab;
-      color: var(--muted);
-      font-size: 13px;
-      padding: 2px 0;
       user-select: none;
-      flex-shrink: 0;
-      margin-top: 1px;
+    }
+    .item:hover { background: var(--surface-2); }
+    .item.dragging { opacity: .3; }
+    .item.drag-over::before {
+      content: '';
+      position: absolute; top: 0; left: 0; right: 0;
+      height: 2px; background: var(--blue); border-radius: 2px;
+    }
+
+    /* Priority left-bar */
+    .item::after {
+      content: '';
+      position: absolute; left: 2px; top: 8px; bottom: 8px;
+      width: 2px; border-radius: 2px; background: transparent;
+      transition: background .15s;
+    }
+    .item[data-priority="high"]::after   { background: var(--india); }
+    .item[data-priority="medium"]::after { background: var(--errands); }
+    .item[data-priority="low"]::after    { background: var(--creative); }
+
+    /* Drag handle */
+    .drag-handle {
+      display: none; cursor: grab; color: var(--text-3);
+      font-size: 11px; user-select: none; flex-shrink: 0;
+      padding-top: 3px; line-height: 1; opacity: 0;
+      transition: opacity .1s;
     }
     .drag-handle:active { cursor: grabbing; }
+    body.edit-mode .item:hover .drag-handle { opacity: 1; }
     body.edit-mode .drag-handle { display: block; }
 
-    /* checkbox */
+    /* Checkbox */
     .item-check {
       display: none;
-      width: 16px;
-      height: 16px;
-      flex-shrink: 0;
-      margin-top: 2px;
-      accent-color: #7c9ff5;
-      cursor: pointer;
+      width: 15px; height: 15px; flex-shrink: 0;
+      margin-top: 3px; accent-color: var(--blue); cursor: pointer;
     }
     body.edit-mode .item-check { display: block; }
 
-    .item-bullet { width: 6px; height: 6px; border-radius: 50%; margin-top: 5px; flex-shrink: 0; }
-    body.edit-mode .item-bullet { display: none; }
+    /* Cat dot */
+    .item-cat-dot {
+      width: 6px; height: 6px; border-radius: 50%;
+      flex-shrink: 0; margin-top: 5px;
+    }
+    body.edit-mode .item-cat-dot { display: none; }
 
+    /* Body */
     .item-body { flex: 1; min-width: 0; }
-    .item-text { font-size: 14px; line-height: 1.4; color: var(--text); }
-    .item-text.done { text-decoration: line-through; color: var(--muted); }
-    .item-meta { display: flex; align-items: center; gap: 8px; margin-top: 3px; flex-wrap: wrap; }
-    .item-time { font-size: 11px; color: var(--muted); }
-    .badge { font-size: 10px; padding: 1px 6px; border-radius: 4px; font-weight: 500; letter-spacing: .2px; cursor: default; }
-    .badge.high    { background: #3d1a1a; color: #f57c7c; }
-    .badge.medium  { background: #2e2b1a; color: #f5c97c; }
-    .badge.low     { background: #1a2e1a; color: #a8e6a3; }
-    body.edit-mode .badge { cursor: pointer; }
-    body.edit-mode .badge:hover { filter: brightness(1.3); }
-    .reminder-tag { font-size: 11px; color: #7c9ff5; background: #1a2240; padding: 1px 6px; border-radius: 4px; }
-    body.edit-mode .reminder-tag { cursor: pointer; }
-    body.edit-mode .reminder-tag:hover { filter: brightness(1.3); }
+    .item-text {
+      font-size: 13.5px; color: var(--text); line-height: 1.45;
+      border-radius: 3px; transition: background .1s;
+    }
+    .item-text.done { text-decoration: line-through; color: var(--text-3); }
+    .item-text[contenteditable="true"] {
+      outline: none;
+      background: var(--blue-dim);
+      padding: 1px 4px;
+      border-radius: 3px;
+      cursor: text;
+    }
+    body.edit-mode .item-text { cursor: text; }
 
-    /* edit-mode inline controls */
-    .item-edit-controls {
+    .item-meta { display: flex; align-items: center; gap: 6px; margin-top: 3px; flex-wrap: wrap; }
+    .item-time { font-size: 11px; color: var(--text-3); }
+
+    .badge {
+      font-size: 10px; font-weight: 500;
+      padding: 1px 7px; border-radius: 4px; letter-spacing: .1px;
+    }
+    .badge.high   { background: rgba(185,28,28,.1);  color: var(--india); }
+    .badge.medium { background: rgba(161,98,7,.1);   color: var(--errands); }
+    .badge.low    { background: rgba(21,128,61,.1);  color: var(--creative); }
+
+    .reminder-tag {
+      font-size: 11px; color: var(--blue);
+      background: var(--blue-dim);
+      padding: 1px 7px; border-radius: 4px;
+    }
+
+    /* Edit action buttons (right side, hover in edit mode) */
+    .item-actions {
       display: none;
-      gap: 6px;
-      margin-top: 6px;
-      flex-wrap: wrap;
-    }
-    body.edit-mode .item-edit-controls { display: flex; }
-    .edit-ctrl-btn {
-      font-size: 11px;
-      background: var(--surface3);
-      border: 1px solid var(--border);
-      color: var(--muted);
-      padding: 2px 8px;
-      border-radius: 5px;
-      cursor: pointer;
-      transition: color .12s, border-color .12s;
-    }
-    .edit-ctrl-btn:hover { color: var(--text); border-color: #555; }
-
-    /* ── Edit panel (bottom bar) ── */
-    #edit-panel {
-      display: none;
-      position: fixed;
-      bottom: 0; left: 0; right: 0;
-      background: #13161f;
-      border-top: 1px solid #1e3060;
-      padding: 14px 24px;
-      z-index: 100;
-      gap: 12px;
-      align-items: flex-start;
-    }
-    body.edit-mode #edit-panel { display: flex; }
-    #edit-panel .panel-left { flex: 1; }
-    #edit-panel h4 { font-size: 12px; color: #7c9ff5; margin-bottom: 6px; letter-spacing: .3px; }
-    #changes-list { font-size: 12px; color: var(--muted); line-height: 1.8; }
-    #changes-list .change-line { display: flex; align-items: baseline; gap: 6px; }
-    #changes-list .change-line span { color: var(--text); }
-    #changes-empty { font-size: 12px; color: var(--muted); font-style: italic; }
-
-    .panel-actions { display: flex; flex-direction: column; gap: 8px; min-width: 160px; }
-    .panel-btn {
-      padding: 8px 16px;
-      border-radius: 7px;
-      font-size: 13px;
-      font-weight: 500;
-      cursor: pointer;
-      border: none;
-      transition: filter .15s;
-      text-align: center;
-    }
-    .panel-btn:hover { filter: brightness(1.1); }
-    .panel-btn.primary { background: #1e6040; color: #a8e6a3; }
-    .panel-btn.secondary { background: var(--surface2); color: var(--muted); border: 1px solid var(--border); }
-
-    /* ── WhatsApp copy modal ── */
-    #wa-modal {
-      display: none;
-      position: fixed;
-      inset: 0;
-      background: rgba(0,0,0,.7);
-      z-index: 200;
+      gap: 3px;
+      flex-shrink: 0;
       align-items: center;
-      justify-content: center;
+      margin-left: auto;
+      padding-left: 6px;
     }
-    #wa-modal.open { display: flex; }
-    .modal-box {
-      background: #1a1a1a;
+    body.edit-mode .item:hover .item-actions { display: flex; }
+
+    .act-btn {
+      display: flex; align-items: center; justify-content: center;
+      height: 24px; padding: 0 7px;
+      border-radius: 4px; border: 1px solid var(--border-2);
+      background: var(--surface); color: var(--text-2);
+      font-size: 11px; font-weight: 500;
+      transition: background .1s, border-color .1s, color .1s;
+      white-space: nowrap;
+    }
+    .act-btn:hover { background: var(--surface-3); border-color: var(--border-2); color: var(--text); }
+    .act-btn.act-priority { gap: 4px; }
+    .act-btn .act-dot { width: 5px; height: 5px; border-radius: 50%; }
+    .act-btn.act-archive:hover { background: rgba(185,28,28,.07); border-color: rgba(185,28,28,.25); color: var(--india); }
+
+    /* ── Popovers ─────────────────────────────────────────────── */
+    .popover {
+      position: fixed;
+      z-index: 300;
+      background: var(--surface);
+      border: 1px solid var(--border-2);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-lg);
+      padding: 8px;
+      animation: popIn .12s ease-out;
+    }
+    @keyframes popIn { from { opacity:0; transform:scale(.95) translateY(-4px); } to { opacity:1; transform:scale(1) translateY(0); } }
+
+    /* Priority picker */
+    .picker-priority { display: flex; gap: 4px; }
+    .pick-pill {
+      padding: 4px 12px; border-radius: 5px;
       border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 24px;
-      width: 440px;
-      max-width: 92vw;
+      background: none; font-size: 12px; font-weight: 500;
+      color: var(--text-2); transition: all .1s;
     }
-    .modal-box h3 { font-size: 16px; margin-bottom: 6px; }
-    .modal-box p { font-size: 12px; color: var(--muted); margin-bottom: 14px; }
+    .pick-pill:hover { border-color: var(--border-2); color: var(--text); background: var(--surface-2); }
+    .pick-pill.sel-high   { background: rgba(185,28,28,.1);  border-color: rgba(185,28,28,.3);  color: var(--india); }
+    .pick-pill.sel-medium { background: rgba(161,98,7,.1);   border-color: rgba(161,98,7,.3);   color: var(--errands); }
+    .pick-pill.sel-low    { background: rgba(21,128,61,.1);  border-color: rgba(21,128,61,.3);  color: var(--creative); }
+    .pick-pill.pick-none  { color: var(--text-3); font-size: 11px; }
+
+    /* Reminder picker */
+    .picker-reminder { width: 260px; display: flex; flex-direction: column; gap: 8px; }
+    .reminder-input {
+      width: 100%; padding: 7px 10px;
+      background: var(--surface-2); border: 1px solid var(--border-2);
+      border-radius: var(--radius-sm); font-family: inherit;
+      font-size: 13px; color: var(--text); outline: none;
+    }
+    .reminder-input:focus { border-color: var(--blue); background: #fff; }
+    .quick-picks { display: flex; flex-wrap: wrap; gap: 4px; }
+    .quick-pick {
+      font-size: 11px; padding: 3px 8px;
+      background: var(--surface-2); border: 1px solid var(--border);
+      border-radius: 4px; color: var(--text-2);
+      transition: all .1s;
+    }
+    .quick-pick:hover { background: var(--blue-dim); border-color: rgba(37,99,235,.3); color: var(--blue); }
+    .picker-footer { display: flex; justify-content: space-between; align-items: center; gap: 6px; padding-top: 2px; }
+    .pick-remove { font-size: 11px; background: none; border: none; color: var(--text-3); padding: 0; }
+    .pick-remove:hover { color: var(--india); }
+    .pick-confirm {
+      margin-left: auto;
+      padding: 5px 12px; border-radius: 5px;
+      background: var(--blue); border: none;
+      color: #fff; font-size: 12px; font-weight: 500;
+    }
+    .pick-confirm:hover { filter: brightness(1.1); }
+
+    /* ── Skeleton ─────────────────────────────────────────────── */
+    .skeleton-group { margin-bottom: 28px; }
+    .skeleton-hdr { height: 10px; width: 70px; background: var(--surface-3); border-radius: 4px; margin-bottom: 14px; animation: sk 1.6s ease-in-out infinite; }
+    .skeleton-row { height: 36px; background: var(--surface-3); border-radius: var(--radius-sm); margin-bottom: 3px; animation: sk 1.6s ease-in-out infinite; }
+    .skeleton-row:nth-child(2) { width: 82%; animation-delay: .1s; }
+    .skeleton-row:nth-child(3) { width: 65%; animation-delay: .2s; }
+    @keyframes sk { 0%,100% { opacity:.4; } 50% { opacity:.7; } }
+
+    /* ── Edit drawer ─────────────────────────────────────────── */
+    #edit-drawer {
+      position: fixed; bottom: 0; left: 0; right: 0;
+      background: var(--surface);
+      border-top: 1px solid var(--border-2);
+      box-shadow: 0 -4px 24px rgba(0,0,0,.08);
+      padding: 14px 24px 18px;
+      z-index: 200;
+      display: flex; align-items: flex-start; gap: 20px;
+      transform: translateY(100%);
+      transition: transform .22s cubic-bezier(.25,.46,.45,.94);
+    }
+    body.edit-mode #edit-drawer { transform: translateY(0); }
+
+    .drawer-left { flex: 1; min-width: 0; }
+    .drawer-label {
+      font-size: 10px; font-weight: 600; letter-spacing: .5px;
+      text-transform: uppercase; color: var(--blue); margin-bottom: 8px;
+    }
+    #changes-list { display: flex; flex-direction: column; gap: 4px; }
+    .change-chip {
+      display: flex; align-items: center; gap: 8px;
+      background: var(--surface-2); border: 1px solid var(--border);
+      border-radius: 5px; padding: 5px 8px;
+      font-size: 12px; color: var(--text-2);
+      animation: chipIn .15s ease-out;
+    }
+    @keyframes chipIn { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }
+    .change-chip span { color: var(--text); font-weight: 500; }
+    .change-undo {
+      margin-left: auto; flex-shrink: 0;
+      background: none; border: none; color: var(--text-3);
+      font-size: 13px; padding: 0 2px; line-height: 1;
+      transition: color .1s;
+    }
+    .change-undo:hover { color: var(--india); }
+    #changes-empty { font-size: 12px; color: var(--text-3); font-style: italic; padding: 2px 0; }
+
+    .drawer-actions { display: flex; flex-direction: column; gap: 6px; min-width: 148px; }
+    .drawer-btn {
+      padding: 8px 14px; border-radius: var(--radius-sm);
+      font-size: 12px; font-weight: 500;
+      border: none; text-align: center;
+      transition: filter .12s;
+    }
+    .drawer-btn:hover { filter: brightness(.95); }
+    .drawer-btn.primary   { background: #dcfce7; color: #15803d; }
+    .drawer-btn.secondary { background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border-2); }
+
+    /* ── WhatsApp sheet ───────────────────────────────────────── */
+    #wa-sheet {
+      position: fixed; inset: 0; z-index: 400;
+      display: flex; align-items: flex-end;
+      pointer-events: none;
+    }
+    #wa-sheet.open { pointer-events: all; }
+    .wa-backdrop {
+      position: absolute; inset: 0;
+      background: rgba(0,0,0,.35);
+      opacity: 0; transition: opacity .22s;
+      backdrop-filter: blur(2px);
+    }
+    #wa-sheet.open .wa-backdrop { opacity: 1; }
+    .wa-panel {
+      position: relative;
+      background: var(--surface);
+      border-top: 1px solid var(--border-2);
+      border-radius: 16px 16px 0 0;
+      box-shadow: var(--shadow-lg);
+      padding: 18px 24px 28px;
+      width: 100%; max-width: 520px; margin: 0 auto;
+      transform: translateY(100%);
+      transition: transform .25s cubic-bezier(.25,.46,.45,.94);
+    }
+    #wa-sheet.open .wa-panel { transform: translateY(0); }
+    .wa-handle { width: 36px; height: 4px; background: var(--border-2); border-radius: 2px; margin: 0 auto 16px; }
+    .wa-panel h3 { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+    .wa-panel p  { font-size: 12px; color: var(--text-2); margin-bottom: 10px; }
     #wa-text {
       width: 100%;
-      background: #111;
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      color: var(--text);
-      font-family: monospace;
-      font-size: 13px;
-      padding: 12px;
-      resize: vertical;
-      min-height: 120px;
+      background: var(--surface-2); border: 1px solid var(--border-2);
+      border-radius: var(--radius-sm); color: var(--text);
+      font-family: 'SF Mono', 'Menlo', monospace; font-size: 12px;
+      padding: 10px 12px; resize: vertical; min-height: 90px; outline: none;
     }
-    .modal-actions { display: flex; gap: 10px; margin-top: 12px; justify-content: flex-end; }
-    .modal-btn {
-      padding: 7px 16px;
-      border-radius: 7px;
-      font-size: 13px;
-      cursor: pointer;
-      border: none;
+    #wa-text:focus { border-color: var(--blue); }
+    .wa-actions { display: flex; gap: 8px; margin-top: 10px; justify-content: flex-end; align-items: center; }
+    #copy-confirm { font-size: 11px; color: var(--creative); margin-right: auto; display: none; }
+    .wa-btn {
+      padding: 7px 16px; border-radius: var(--radius-sm);
+      font-size: 12px; font-weight: 500; border: none;
     }
-    .modal-btn.copy { background: #7c9ff5; color: #0f0f0f; font-weight: 600; }
-    .modal-btn.close { background: var(--surface2); color: var(--muted); border: 1px solid var(--border); }
-    #copy-confirm { font-size: 12px; color: #a8e6a3; display: none; margin-top: 6px; text-align: right; }
+    .wa-btn.copy   { background: var(--blue); color: #fff; }
+    .wa-btn.cancel { background: var(--surface-2); color: var(--text-2); border: 1px solid var(--border-2); }
 
-    /* ── Archive ── */
+    /* ── Archive ─────────────────────────────────────────────── */
     .archive-section { margin-top: 8px; }
-    .archive-toggle { background: none; border: none; color: var(--muted); font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 6px; padding: 4px 0; margin-bottom: 12px; transition: color .15s; }
-    .archive-toggle:hover { color: var(--text); }
-    .archive-grid { display: none; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; }
-    .archive-grid.open { display: grid; }
-    .archive-section .section { opacity: .5; }
+    .archive-toggle {
+      background: none; border: none; color: var(--text-3);
+      font-size: 12px; display: flex; align-items: center;
+      gap: 6px; padding: 4px 0; margin-bottom: 14px;
+      transition: color .12s;
+    }
+    .archive-toggle:hover { color: var(--text-2); }
+    .archive-arrow { transition: transform .18s; display: inline-block; }
+    .archive-arrow.open { transform: rotate(90deg); }
+    .archive-content { display: none; }
+    .archive-content.open { display: block; }
+    .archive-content .section-group { opacity: .45; }
 
-    .empty { padding: 20px 16px; color: var(--muted); font-size: 13px; text-align: center; }
-    #status { text-align: center; padding: 60px; color: var(--muted); }
-
-    .dot-books     { background: var(--books); }
-    .dot-india-rci { background: var(--india-rci); }
-    .dot-errands   { background: var(--errands); }
-    .dot-creative  { background: var(--creative); }
-    .dot-misc      { background: var(--misc); }
+    /* ── Responsive ──────────────────────────────────────────── */
+    @media (max-width: 680px) {
+      .sidebar { display: none; }
+      .main { padding: 20px 16px 140px; }
+      #edit-drawer { padding: 12px 16px 18px; }
+    }
   </style>
 </head>
 <body>
 
-<header>
-  <h1>To-Do</h1>
-  <span id="last-updated"></span>
-  <button id="refresh-btn" class="hdr-btn" onclick="load()">↻ Refresh</button>
-  <button id="edit-btn" class="hdr-btn" onclick="toggleEditMode()">✏ Edit</button>
-</header>
+<div class="app">
 
-<div id="upcoming"></div>
-<div id="status">Loading...</div>
-<div id="main" style="display:none">
-  <div class="sections" id="active-sections"></div>
-  <div class="archive-section">
-    <button class="archive-toggle" onclick="toggleArchive()">
-      <span id="archive-arrow">▶</span> Archive (<span id="archive-count">0</span>)
-    </button>
-    <div class="archive-grid" id="archive-sections"></div>
+  <!-- ── Sidebar ── -->
+  <aside class="sidebar">
+    <div class="sidebar-logo">
+      <h1>Stream</h1>
+      <div class="sub">Deep's secretary</div>
+    </div>
+    <nav class="sidebar-nav">
+      <div class="nav-label">Categories</div>
+      <div class="nav-item active" data-cat="all" onclick="filterCat('all',this)">
+        <span class="nav-dot" style="background:var(--text-3)"></span>
+        All
+        <span class="nav-count" id="count-all">–</span>
+      </div>
+      <div class="nav-item" data-cat="errands" onclick="filterCat('errands',this)">
+        <span class="nav-dot" style="background:var(--errands)"></span>
+        Errands
+        <span class="nav-count" id="count-errands">–</span>
+      </div>
+      <div class="nav-item" data-cat="books" onclick="filterCat('books',this)">
+        <span class="nav-dot" style="background:var(--books)"></span>
+        Books
+        <span class="nav-count" id="count-books">–</span>
+      </div>
+      <div class="nav-item" data-cat="india-rci" onclick="filterCat('india-rci',this)">
+        <span class="nav-dot" style="background:var(--india)"></span>
+        India / RCI
+        <span class="nav-count" id="count-india-rci">–</span>
+      </div>
+      <div class="nav-item" data-cat="creative" onclick="filterCat('creative',this)">
+        <span class="nav-dot" style="background:var(--creative)"></span>
+        Creative
+        <span class="nav-count" id="count-creative">–</span>
+      </div>
+      <div class="nav-item" data-cat="misc" onclick="filterCat('misc',this)">
+        <span class="nav-dot" style="background:var(--misc)"></span>
+        Misc
+        <span class="nav-count" id="count-misc">–</span>
+      </div>
+    </nav>
+    <div class="sidebar-footer">
+      <div id="last-updated-sidebar"></div>
+      <button class="footer-btn" onclick="load()">
+        <span class="btn-icon">↻</span> Refresh
+      </button>
+      <button class="footer-btn" id="edit-btn" onclick="toggleEditMode()">
+        <span class="btn-icon">✦</span>
+        <span id="edit-btn-label">Edit mode</span>
+      </button>
+    </div>
+  </aside>
+
+  <!-- ── Main ── -->
+  <main class="main">
+
+    <div id="processing-banner">
+      <div class="processing-dot"></div>
+      Claude is processing new items…
+    </div>
+
+    <div id="upcoming"></div>
+
+    <div id="status">
+      <div class="skeleton-group">
+        <div class="skeleton-hdr"></div>
+        <div class="skeleton-row"></div>
+        <div class="skeleton-row"></div>
+        <div class="skeleton-row"></div>
+      </div>
+      <div class="skeleton-group">
+        <div class="skeleton-hdr"></div>
+        <div class="skeleton-row"></div>
+        <div class="skeleton-row"></div>
+      </div>
+    </div>
+
+    <div id="main-content" style="display:none">
+      <div id="active-groups"></div>
+      <div class="archive-section">
+        <button class="archive-toggle" onclick="toggleArchive()">
+          <span class="archive-arrow" id="archive-arrow">▶</span>
+          Archive · <span id="archive-count">0</span> items
+        </button>
+        <div class="archive-content" id="archive-content"></div>
+      </div>
+    </div>
+
+  </main>
+</div>
+
+<!-- ── Edit drawer ── -->
+<div id="edit-drawer">
+  <div class="drawer-left">
+    <div class="drawer-label">Pending changes</div>
+    <div id="changes-list">
+      <span id="changes-empty">No changes yet — click items to edit, check off, or use the action buttons.</span>
+    </div>
+  </div>
+  <div class="drawer-actions">
+    <button class="drawer-btn primary" onclick="openWASheet()">Send to WhatsApp</button>
+    <button class="drawer-btn secondary" onclick="toggleEditMode()">Done editing</button>
   </div>
 </div>
 
-<!-- Fixed edit panel -->
-<div id="edit-panel">
-  <div class="panel-left">
-    <h4>PENDING CHANGES</h4>
-    <div id="changes-list"><span id="changes-empty">No changes yet — check items off, reorder, or adjust priorities.</span></div>
-  </div>
-  <div class="panel-actions">
-    <button class="panel-btn primary" onclick="openWAModal()">📋 Copy to WhatsApp</button>
-    <button class="panel-btn secondary" onclick="toggleEditMode()">Done editing</button>
-  </div>
-</div>
-
-<!-- WhatsApp copy modal -->
-<div id="wa-modal">
-  <div class="modal-box">
+<!-- ── WhatsApp bottom sheet ── -->
+<div id="wa-sheet">
+  <div class="wa-backdrop" onclick="closeWASheet()"></div>
+  <div class="wa-panel">
+    <div class="wa-handle"></div>
     <h3>Send to WhatsApp</h3>
-    <p>Copy this message and paste it into your WhatsApp conversation with the bot.</p>
+    <p>Copy this and paste it into your bot conversation.</p>
     <textarea id="wa-text" readonly></textarea>
-    <p id="copy-confirm">✓ Copied to clipboard</p>
-    <div class="modal-actions">
-      <button class="modal-btn close" onclick="closeWAModal()">Close</button>
-      <button class="modal-btn copy" onclick="copyWA()">Copy message</button>
+    <div class="wa-actions">
+      <span id="copy-confirm">✓ Copied to clipboard</span>
+      <button class="wa-btn cancel" onclick="closeWASheet()">Cancel</button>
+      <button class="wa-btn copy" onclick="copyWA()">Copy message</button>
     </div>
   </div>
 </div>
@@ -310,36 +633,36 @@
 const CSV_URL = 'https://raw.githubusercontent.com/chillibyte/stream-todo/main/todos.csv';
 
 const CATEGORIES = [
-  { key: 'errands',   label: 'Errands',     dotClass: 'dot-errands' },
-  { key: 'books',     label: 'Books',       dotClass: 'dot-books' },
-  { key: 'india-rci', label: 'India / RCI', dotClass: 'dot-india-rci' },
-  { key: 'creative',  label: 'Creative',    dotClass: 'dot-creative' },
-  { key: 'misc',      label: 'Misc',        dotClass: 'dot-misc' },
+  { key: 'errands',   label: 'Errands',     color: 'var(--errands)' },
+  { key: 'books',     label: 'Books',       color: 'var(--books)'   },
+  { key: 'india-rci', label: 'India / RCI', color: 'var(--india)'   },
+  { key: 'creative',  label: 'Creative',    color: 'var(--creative)'},
+  { key: 'misc',      label: 'Misc',        color: 'var(--misc)'    },
 ];
 
-const PRIORITY_CYCLE = ['high', 'medium', 'low'];
+const PRIORITY_COLORS = { high: 'var(--india)', medium: 'var(--errands)', low: 'var(--creative)' };
+const PRIORITY_LABELS = { high: 'H', medium: 'M', low: 'L' };
 
-let allRows = [];
-let changes = []; // { type, id, field, from, to, label }
+let allRows   = [];
+let changes   = [];
 let dragSrcId = null;
+let activeCat = 'all';
+let activePicker = null;
 
-// ── CSV parsing ──────────────────────────────────────────────
+// ── CSV ───────────────────────────────────────────────────────
 function parseCSV(text) {
   const lines = text.trim().split(/\r?\n/);
-
   function parseLine(line) {
-    const fields = [];
-    let i = 0;
+    const fields = []; let i = 0;
     while (i < line.length) {
       if (line[i] === '"') {
-        let field = '';
-        i++;
+        let f = ''; i++;
         while (i < line.length) {
-          if (line[i] === '"' && line[i+1] === '"') { field += '"'; i += 2; }
+          if (line[i] === '"' && line[i+1] === '"') { f += '"'; i += 2; }
           else if (line[i] === '"') { i++; break; }
-          else field += line[i++];
+          else f += line[i++];
         }
-        fields.push(field);
+        fields.push(f);
         if (line[i] === ',') i++;
       } else {
         const end = line.indexOf(',', i);
@@ -349,7 +672,6 @@ function parseCSV(text) {
     }
     return fields;
   }
-
   const headers = parseLine(lines[0]);
   return lines.slice(1).filter(l => l.trim()).map(line => {
     const vals = parseLine(line);
@@ -359,148 +681,380 @@ function parseCSV(text) {
   });
 }
 
-function esc(str) {
-  return (str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+function esc(s) {
+  return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
 }
 
-// ── Time formatting ──────────────────────────────────────────
-function fmt(isoStr) {
-  if (!isoStr) return '';
-  const d = new Date(isoStr);
-  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+// ── Time ─────────────────────────────────────────────────────
+function fmt(iso) {
+  if (!iso) return '';
+  return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
-function fmtFull(isoStr) {
-  if (!isoStr) return '';
-  const d = new Date(isoStr);
-  const today = new Date();
-  if (d.toDateString() === today.toDateString()) return 'today ' + fmt(isoStr);
+function fmtFull(iso) {
+  if (!iso) return '';
+  const d = new Date(iso), today = new Date();
+  if (d.toDateString() === today.toDateString()) return 'today ' + fmt(iso);
   const tom = new Date(today); tom.setDate(today.getDate() + 1);
-  if (d.toDateString() === tom.toDateString()) return 'tomorrow ' + fmt(isoStr);
-  return d.toLocaleDateString([], { day: 'numeric', month: 'short' }) + ' ' + fmt(isoStr);
+  if (d.toDateString() === tom.toDateString()) return 'tomorrow ' + fmt(iso);
+  return d.toLocaleDateString([], { day: 'numeric', month: 'short' }) + ' ' + fmt(iso);
 }
-function within48h(isoStr) {
-  if (!isoStr) return false;
-  return (Date.now() - new Date(isoStr).getTime()) < 48 * 3600 * 1000;
+function fmtAge(iso) {
+  if (!iso) return '';
+  const mins = Math.floor((Date.now() - new Date(iso)) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return mins + 'm ago';
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return hrs + 'h ago';
+  return Math.floor(hrs / 24) + 'd ago';
+}
+function within48h(iso) {
+  return iso && (Date.now() - new Date(iso).getTime()) < 48 * 3600 * 1000;
 }
 
-// ── Change tracking ──────────────────────────────────────────
+// ── Changes ───────────────────────────────────────────────────
 function recordChange(type, id, label, from, to) {
-  // Dedupe: replace existing change for same id+type
-  changes = changes.filter(c => !(c.id === id && c.type === type));
-  changes.push({ type, id, label, from, to });
+  // If it's a revert to original, remove the change
+  const existing = changes.find(c => c.id === id && c.type === type);
+  if (existing && existing.from === to) {
+    changes = changes.filter(c => !(c.id === id && c.type === type));
+  } else {
+    changes = changes.filter(c => !(c.id === id && c.type === type));
+    changes.push({ type, id, label, from, to });
+  }
   renderChanges();
+}
+
+function undoChange(id, type) {
+  changes = changes.filter(c => !(c.id === id && c.type === type));
+  renderChanges();
+  // Re-render the item to reflect reverted state
+  rebuildItem(id);
 }
 
 function renderChanges() {
   const list = document.getElementById('changes-list');
-  const empty = document.getElementById('changes-empty');
-  if (changes.length === 0) {
-    list.innerHTML = '<span id="changes-empty">No changes yet — check items off, reorder, or adjust priorities.</span>';
+  if (!changes.length) {
+    list.innerHTML = '<span id="changes-empty">No changes yet — click items to edit, check off, or use the action buttons.</span>';
     return;
   }
-  list.innerHTML = changes.map(c => {
+  list.innerHTML = '';
+  changes.forEach(c => {
     let desc = '';
-    if (c.type === 'complete')  desc = `Mark done: <span>${esc(c.label)}</span>`;
+    if (c.type === 'complete')   desc = `Mark done: <span>${esc(c.label)}</span>`;
     if (c.type === 'uncomplete') desc = `Reopen: <span>${esc(c.label)}</span>`;
-    if (c.type === 'priority')  desc = `Priority → <span>${c.to}</span>: ${esc(c.label)}`;
-    if (c.type === 'reminder')  desc = `Reminder → <span>${c.to||'none'}</span>: ${esc(c.label)}`;
-    if (c.type === 'reorder')   desc = `Move <span>${esc(c.label)}</span> ${c.to}`;
-    return `<div class="change-line">· ${desc}</div>`;
-  }).join('');
+    if (c.type === 'priority')   desc = c.to ? `Priority → <span>${c.to}</span>: ${esc(c.label)}` : `Remove priority: <span>${esc(c.label)}</span>`;
+    if (c.type === 'reminder')   desc = c.to === 'remove' ? `Remove reminder: <span>${esc(c.label)}</span>` : `Reminder → <span>${c.to}</span>: ${esc(c.label)}`;
+    if (c.type === 'reorder')    desc = `Move <span>${esc(c.label)}</span> ${c.to}`;
+    if (c.type === 'text')       desc = `Rename: <span>${esc(c.from)}</span> → <span>${esc(c.to)}</span>`;
+    if (c.type === 'archive')    desc = `Archive: <span>${esc(c.label)}</span>`;
+    const chip = document.createElement('div');
+    chip.className = 'change-chip';
+    chip.innerHTML = `<span style="color:var(--text-2)">${desc}</span><button class="change-undo" title="Undo">×</button>`;
+    chip.querySelector('.change-undo').addEventListener('click', () => undoChange(c.id, c.type));
+    list.appendChild(chip);
+  });
 }
 
-// ── WhatsApp message generation ──────────────────────────────
+// Rebuild a single item after undo (refresh its visual state from allRows)
+function rebuildItem(id) {
+  const item = allRows.find(r => r.id === id);
+  if (!item) return;
+  const existing = document.querySelector(`.item[data-id="${id}"]`);
+  if (!existing) return;
+  const newEl = buildItem(item);
+  existing.replaceWith(newEl);
+}
+
+// ── Popovers ──────────────────────────────────────────────────
+function closePicker() {
+  if (activePicker) { activePicker.remove(); activePicker = null; }
+}
+
+function positionPopover(el, anchor) {
+  document.body.appendChild(el);
+  activePicker = el;
+  const r = anchor.getBoundingClientRect();
+  el.style.top  = (r.bottom + 6) + 'px';
+  el.style.left = r.left + 'px';
+  // Clamp right
+  requestAnimationFrame(() => {
+    const er = el.getBoundingClientRect();
+    if (er.right > window.innerWidth - 8) {
+      el.style.left = (r.right - er.width) + 'px';
+    }
+    if (er.bottom > window.innerHeight - 8) {
+      el.style.top = (r.top - er.height - 6) + 'px';
+    }
+  });
+}
+
+function showPriorityPicker(anchor, id, label, current) {
+  closePicker();
+  const p = document.createElement('div');
+  p.className = 'popover picker-priority';
+  const opts = [
+    { v: 'high',   lbl: 'High',   cls: 'sel-high'   },
+    { v: 'medium', lbl: 'Medium', cls: 'sel-medium'  },
+    { v: 'low',    lbl: 'Low',    cls: 'sel-low'     },
+    { v: '',       lbl: 'None',   cls: 'pick-none'   },
+  ];
+  opts.forEach(o => {
+    const btn = document.createElement('button');
+    btn.className = 'pick-pill' + (current === o.v ? ' ' + o.cls : '');
+    btn.textContent = o.lbl;
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      if (o.v !== current) recordChange('priority', id, label, current, o.v);
+      // Update item's data-priority and left bar
+      const itemEl = document.querySelector(`.item[data-id="${id}"]`);
+      if (itemEl) {
+        itemEl.dataset.priority = o.v;
+        // Update badge
+        const badge = itemEl.querySelector('.badge');
+        if (badge && o.v) {
+          badge.className = `badge ${o.v}`;
+          badge.textContent = o.v;
+        } else if (badge && !o.v) {
+          badge.remove();
+        }
+        // Update action button
+        updatePriorityBtn(itemEl, id, label, o.v);
+      }
+      closePicker();
+    });
+    p.appendChild(btn);
+  });
+  positionPopover(p, anchor);
+  setTimeout(() => document.addEventListener('click', closePicker, { once: true }), 10);
+}
+
+function updatePriorityBtn(itemEl, id, label, priority) {
+  const btn = itemEl.querySelector('.act-priority');
+  if (!btn) return;
+  btn.innerHTML = priority
+    ? `<span class="act-dot" style="background:${PRIORITY_COLORS[priority]}"></span>${priority}`
+    : 'Priority';
+  btn.onclick = (e) => { e.stopPropagation(); showPriorityPicker(btn, id, label, priority); };
+}
+
+function showReminderPicker(anchor, id, label, current) {
+  closePicker();
+  const p = document.createElement('div');
+  p.className = 'popover picker-reminder';
+
+  const quickOpts = [
+    '5:20pm today',
+    'tonight 8pm',
+    'tomorrow 9am',
+    '12:30pm today',
+    'Saturday 10am',
+  ];
+
+  p.innerHTML = `
+    <input type="text" class="reminder-input" placeholder="e.g. tomorrow 9am, Friday 3pm…" value="${current ? fmtFull(current) : ''}">
+    <div class="quick-picks">${quickOpts.map(o => `<button class="quick-pick">${o}</button>`).join('')}</div>
+    <div class="picker-footer">
+      ${current ? '<button class="pick-remove">Remove reminder</button>' : '<span></span>'}
+      <button class="pick-confirm">Set reminder</button>
+    </div>`;
+
+  const input = p.querySelector('.reminder-input');
+
+  p.querySelectorAll('.quick-pick').forEach(btn => {
+    btn.addEventListener('click', e => { e.stopPropagation(); input.value = btn.textContent; input.focus(); });
+  });
+
+  p.querySelector('.pick-confirm').addEventListener('click', e => {
+    e.stopPropagation();
+    const val = input.value.trim();
+    if (val) {
+      recordChange('reminder', id, label, current, val);
+      // Update reminder tag
+      const itemEl = document.querySelector(`.item[data-id="${id}"]`);
+      if (itemEl) {
+        let tag = itemEl.querySelector('.reminder-tag');
+        if (!tag) {
+          tag = document.createElement('span');
+          tag.className = 'reminder-tag';
+          itemEl.querySelector('.item-meta').appendChild(tag);
+        }
+        tag.textContent = '⏰ ' + val;
+      }
+    }
+    closePicker();
+  });
+
+  const removeBtn = p.querySelector('.pick-remove');
+  if (removeBtn) {
+    removeBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      recordChange('reminder', id, label, current, 'remove');
+      const itemEl = document.querySelector(`.item[data-id="${id}"]`);
+      if (itemEl) itemEl.querySelector('.reminder-tag')?.remove();
+      closePicker();
+    });
+  }
+
+  positionPopover(p, anchor);
+  input.focus();
+  setTimeout(() => {
+    document.addEventListener('click', e => {
+      if (!p.contains(e.target)) closePicker();
+    }, { once: true });
+  }, 10);
+}
+
+// ── WhatsApp ──────────────────────────────────────────────────
 function buildWAMessage() {
-  if (changes.length === 0) return '(no changes)';
+  if (!changes.length) return '(no changes)';
   const lines = ['UPDATES'];
   changes.forEach(c => {
     if (c.type === 'complete')   lines.push(`- mark done: ${c.label}`);
     if (c.type === 'uncomplete') lines.push(`- reopen: ${c.label}`);
-    if (c.type === 'priority')   lines.push(`- priority ${c.to}: ${c.label}`);
-    if (c.type === 'reminder')   lines.push(`- remind me about "${c.label}" at ${c.to}`);
+    if (c.type === 'priority')   lines.push(c.to ? `- priority ${c.to}: ${c.label}` : `- remove priority: ${c.label}`);
+    if (c.type === 'reminder')   lines.push(c.to === 'remove' ? `- remove reminder: ${c.label}` : `- remind me about "${c.label}" at ${c.to}`);
     if (c.type === 'reorder')    lines.push(`- move "${c.label}" ${c.to}`);
+    if (c.type === 'text')       lines.push(`- rename "${c.from}" to "${c.to}"`);
+    if (c.type === 'archive')    lines.push(`- archive: ${c.label}`);
   });
   return lines.join('\n');
 }
-
-function openWAModal() {
+function openWASheet() {
   document.getElementById('wa-text').value = buildWAMessage();
   document.getElementById('copy-confirm').style.display = 'none';
-  document.getElementById('wa-modal').classList.add('open');
+  document.getElementById('wa-sheet').classList.add('open');
 }
-function closeWAModal() {
-  document.getElementById('wa-modal').classList.remove('open');
-}
+function closeWASheet() { document.getElementById('wa-sheet').classList.remove('open'); }
 function copyWA() {
-  const txt = document.getElementById('wa-text').value;
-  navigator.clipboard.writeText(txt).then(() => {
-    document.getElementById('copy-confirm').style.display = 'block';
-    setTimeout(() => document.getElementById('copy-confirm').style.display = 'none', 2500);
+  navigator.clipboard.writeText(document.getElementById('wa-text').value).then(() => {
+    const c = document.getElementById('copy-confirm');
+    c.style.display = 'block';
+    setTimeout(() => c.style.display = 'none', 2500);
   });
 }
 
-// ── Edit mode ────────────────────────────────────────────────
+// ── Edit mode ─────────────────────────────────────────────────
 function toggleEditMode() {
+  closePicker();
   const on = document.body.classList.toggle('edit-mode');
   const btn = document.getElementById('edit-btn');
   btn.classList.toggle('active', on);
-  btn.textContent = on ? '✕ Editing' : '✏ Edit';
+  document.getElementById('edit-btn-label').textContent = on ? 'Exit editing' : 'Edit mode';
+  document.getElementById('edit-btn').querySelector('.btn-icon').textContent = on ? '✕' : '✦';
   if (!on) { changes = []; renderChanges(); }
 }
 
-// ── Build item DOM ───────────────────────────────────────────
+// Esc to exit edit mode
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    if (activePicker) { closePicker(); return; }
+    if (document.body.classList.contains('edit-mode')) toggleEditMode();
+  }
+});
+
+// ── Sidebar filter ─────────────────────────────────────────────
+function filterCat(cat, el) {
+  activeCat = cat;
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  el.classList.add('active');
+  renderGroups();
+}
+
+// ── Build item ────────────────────────────────────────────────
 function buildItem(item) {
-  const isDone = item.completed === 'true';
-  const reminder = item.reminder_at;
+  const isDone     = item.completed === 'true';
+  const reminder   = item.reminder_at;
   const isUpcoming = reminder && new Date(reminder) > new Date() && !isDone;
-  const cat = CATEGORIES.find(c => c.key === item.category);
+  const cat        = CATEGORIES.find(c => c.key === item.category);
+  const priority   = item.priority || '';
 
   const div = document.createElement('div');
   div.className = 'item';
-  div.dataset.id = item.id;
-  div.draggable = false; // enabled only in edit mode via JS
+  div.dataset.id       = item.id;
+  div.dataset.priority = priority;
+  div.draggable = false;
+
+  // Priority action button label
+  const priorityBtnHTML = priority
+    ? `<span class="act-dot" style="background:${PRIORITY_COLORS[priority]}"></span>${priority}`
+    : 'Priority';
 
   div.innerHTML = `
-    <span class="drag-handle" title="Drag to reorder">⠿</span>
-    <input type="checkbox" class="item-check" ${isDone ? 'checked' : ''} title="Mark complete" />
-    <div class="item-bullet ${cat?.dotClass || 'dot-misc'}"></div>
+    <span class="drag-handle">⠿</span>
+    <input type="checkbox" class="item-check" ${isDone ? 'checked' : ''} />
+    <div class="item-cat-dot" style="background:${cat ? cat.color : 'var(--misc)'}"></div>
     <div class="item-body">
       <div class="item-text${isDone ? ' done' : ''}">${esc(item.raw_message)}</div>
       <div class="item-meta">
-        <span class="item-time">${fmtFull(item.timestamp)}</span>
-        ${item.priority ? `<span class="badge ${item.priority}" title="Click in edit mode to cycle priority">${item.priority}</span>` : ''}
-        ${isUpcoming ? `<span class="reminder-tag" title="Click in edit mode to change time">⏰ ${fmtFull(reminder)}</span>` : ''}
+        <span class="item-time">${fmtAge(item.timestamp)}</span>
+        ${priority ? `<span class="badge ${priority}">${priority}</span>` : ''}
+        ${isUpcoming ? `<span class="reminder-tag">⏰ ${fmtFull(reminder)}</span>` : ''}
       </div>
-      <div class="item-edit-controls">
-        ${!item.priority ? `<button class="edit-ctrl-btn" onclick="cyclePriority(this,'${item.id}','','${esc(item.raw_message)}')">+ priority</button>` : ''}
-        ${!reminder ? `<button class="edit-ctrl-btn" onclick="editReminder('${item.id}','${esc(item.raw_message)}')">+ reminder</button>` : ''}
-        ${reminder ? `<button class="edit-ctrl-btn" onclick="editReminder('${item.id}','${esc(item.raw_message)}','${reminder}')">change reminder</button>` : ''}
-      </div>
+    </div>
+    <div class="item-actions">
+      <button class="act-btn act-priority" title="Set priority">${priorityBtnHTML}</button>
+      <button class="act-btn act-reminder" title="Set reminder">⏰</button>
+      <button class="act-btn act-archive"  title="Archive">Archive</button>
     </div>`;
 
-  // Checkbox toggle
-  const check = div.querySelector('.item-check');
-  check.addEventListener('change', () => {
+  // ── Checkbox ──
+  div.querySelector('.item-check').addEventListener('change', e => {
     const txt = div.querySelector('.item-text');
-    if (check.checked) {
-      txt.classList.add('done');
-      recordChange('complete', item.id, item.raw_message, false, true);
+    txt.classList.toggle('done', e.target.checked);
+    recordChange(e.target.checked ? 'complete' : 'uncomplete', item.id, item.raw_message, null, null);
+  });
+
+  // ── Inline text edit ──
+  const textEl = div.querySelector('.item-text');
+  textEl.addEventListener('click', () => {
+    if (!document.body.classList.contains('edit-mode')) return;
+    if (textEl.contentEditable === 'true') return;
+    textEl.contentEditable = 'true';
+    textEl.focus();
+    // Select all text
+    const range = document.createRange();
+    range.selectNodeContents(textEl);
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  });
+  textEl.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); textEl.blur(); }
+    if (e.key === 'Escape') { textEl.textContent = item.raw_message; textEl.blur(); }
+  });
+  textEl.addEventListener('blur', () => {
+    if (textEl.contentEditable !== 'true') return;
+    textEl.contentEditable = 'false';
+    const newText = textEl.textContent.trim();
+    if (newText && newText !== item.raw_message) {
+      recordChange('text', item.id, item.raw_message, item.raw_message, newText);
     } else {
-      txt.classList.remove('done');
-      recordChange('uncomplete', item.id, item.raw_message, true, false);
+      textEl.textContent = item.raw_message; // reset if empty or unchanged
     }
   });
 
-  // Priority badge click cycle
-  const badge = div.querySelector('.badge');
-  if (badge) {
-    badge.addEventListener('click', () => {
-      if (!document.body.classList.contains('edit-mode')) return;
-      cyclePriorityEl(badge, item.id, item.raw_message);
-    });
-  }
+  // ── Action buttons ──
+  const priBtn = div.querySelector('.act-priority');
+  priBtn.addEventListener('click', e => {
+    e.stopPropagation();
+    showPriorityPicker(priBtn, item.id, item.raw_message, priority);
+  });
 
-  // Drag and drop
+  div.querySelector('.act-reminder').addEventListener('click', e => {
+    e.stopPropagation();
+    showReminderPicker(div.querySelector('.act-reminder'), item.id, item.raw_message, reminder || null);
+  });
+
+  div.querySelector('.act-archive').addEventListener('click', e => {
+    e.stopPropagation();
+    recordChange('archive', item.id, item.raw_message, null, null);
+    div.style.transition = 'opacity .2s, transform .2s';
+    div.style.opacity = '0';
+    div.style.transform = 'translateX(8px)';
+    setTimeout(() => div.remove(), 220);
+  });
+
+  // ── Drag ──
   div.addEventListener('dragstart', e => {
     dragSrcId = item.id;
     div.classList.add('dragging');
@@ -509,134 +1063,134 @@ function buildItem(item) {
   div.addEventListener('dragend', () => div.classList.remove('dragging'));
   div.addEventListener('dragover', e => {
     if (!document.body.classList.contains('edit-mode')) return;
-    e.preventDefault();
-    div.classList.add('drag-over');
+    e.preventDefault(); div.classList.add('drag-over');
   });
   div.addEventListener('dragleave', () => div.classList.remove('drag-over'));
   div.addEventListener('drop', e => {
-    e.preventDefault();
-    div.classList.remove('drag-over');
+    e.preventDefault(); div.classList.remove('drag-over');
     if (dragSrcId && dragSrcId !== item.id) {
-      const srcRow = allRows.find(r => r.id === dragSrcId);
-      if (srcRow) {
-        recordChange('reorder', dragSrcId, srcRow.raw_message, null, `above "${item.raw_message}"`);
-      }
+      const src = allRows.find(r => r.id === dragSrcId);
+      if (src) recordChange('reorder', dragSrcId, src.raw_message, null, `above "${item.raw_message}"`);
     }
   });
 
-  // Enable dragging only in edit mode
-  const observer = new MutationObserver(() => {
+  new MutationObserver(() => {
     div.draggable = document.body.classList.contains('edit-mode');
-  });
-  observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+  }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
 
   return div;
 }
 
-function cyclePriorityEl(badge, id, label) {
-  const cur = badge.className.replace('badge ', '').trim();
-  const idx = PRIORITY_CYCLE.indexOf(cur);
-  const next = PRIORITY_CYCLE[(idx + 1) % PRIORITY_CYCLE.length];
-  badge.className = `badge ${next}`;
-  badge.textContent = next;
-  recordChange('priority', id, label, cur, next);
-}
+// ── Section group ─────────────────────────────────────────────
+function buildGroup(cat, items) {
+  const wrap = document.createElement('div');
+  wrap.className = 'section-group';
+  wrap.dataset.cat = cat.key;
 
-function editReminder(id, label, current) {
-  const val = prompt(
-    `Set reminder for "${label}"\nEnter a time or date (e.g. "5:20pm", "tomorrow 9am", "Friday 3pm"):`,
-    current ? fmtFull(current) : ''
-  );
-  if (val === null) return;
-  recordChange('reminder', id, label, current || null, val.trim() || 'remove');
-}
+  wrap.innerHTML = `
+    <div class="section-group-header">
+      <div class="section-dot" style="background:${cat.color}"></div>
+      <h2>${cat.label}</h2>
+      <span class="section-badge">${items.length}</span>
+    </div>`;
 
-// ── Section builder ──────────────────────────────────────────
-function buildSection(catKey, catLabel, dotClass, items) {
-  const section = document.createElement('div');
-  section.className = 'section';
-  section.innerHTML = `
-    <div class="section-header">
-      <div class="dot ${dotClass}"></div>
-      <h2>${catLabel}</h2>
-      <span class="count">${items.length}</span>
-    </div>
-    <div class="items" id="items-${catKey}"></div>`;
-  const container = section.querySelector('.items');
-  if (items.length === 0) {
-    container.innerHTML = `<div class="empty">Nothing here</div>`;
+  if (!items.length) {
+    const e = document.createElement('div');
+    e.className = 'empty-state';
+    e.textContent = 'Nothing here';
+    wrap.appendChild(e);
   } else {
-    items.forEach(item => container.appendChild(buildItem(item)));
+    items.forEach(item => wrap.appendChild(buildItem(item)));
   }
-  return section;
+  return wrap;
 }
 
-// ── Upcoming strip ───────────────────────────────────────────
+// ── Upcoming ──────────────────────────────────────────────────
 function renderUpcoming(rows) {
   const now = new Date();
-  const upcoming = rows
+  const ups = rows
     .filter(r => r.reminder_at && new Date(r.reminder_at) > now && r.completed !== 'true')
     .sort((a, b) => new Date(a.reminder_at) - new Date(b.reminder_at))
-    .slice(0, 5);
+    .slice(0, 8);
   const el = document.getElementById('upcoming');
-  if (!upcoming.length) { el.style.display = 'none'; return; }
-  el.style.display = 'block';
-  el.innerHTML = `<h3>Upcoming reminders</h3>` + upcoming.map(r =>
-    `<div class="upcoming-item"><span class="upcoming-time">${fmtFull(r.reminder_at)}</span><span>${esc(r.raw_message)}</span></div>`
-  ).join('');
+  if (!ups.length) { el.className = ''; return; }
+  el.className = 'visible';
+  el.innerHTML = `<div class="upcoming-label">Upcoming</div>
+    <div class="upcoming-track">${ups.map(r => `
+      <div class="upcoming-chip">
+        <div class="upcoming-chip-time">${fmtFull(r.reminder_at)}</div>
+        <div class="upcoming-chip-text">${esc(r.raw_message)}</div>
+      </div>`).join('')}
+    </div>`;
 }
 
-// ── Main load ────────────────────────────────────────────────
-function load() {
-  document.getElementById('status').textContent = 'Loading...';
-  document.getElementById('status').style.display = 'block';
-  document.getElementById('main').style.display = 'none';
+// ── Render groups ─────────────────────────────────────────────
+function renderGroups() {
+  const active = allRows.filter(r =>
+    r.archived !== 'true' &&
+    !(r.completed === 'true' && !within48h(r.completed_at))
+  );
+  const archive = allRows.filter(r =>
+    r.archived === 'true' ||
+    (r.completed === 'true' && !within48h(r.completed_at))
+  );
 
+  // Sidebar counts
+  document.getElementById('count-all').textContent = active.length;
+  CATEGORIES.forEach(c => {
+    const el = document.getElementById(`count-${c.key}`);
+    if (el) el.textContent = active.filter(r => (r.category||'misc') === c.key).length;
+  });
+
+  const activeEl  = document.getElementById('active-groups');
+  const archiveEl = document.getElementById('archive-content');
+  activeEl.innerHTML  = '';
+  archiveEl.innerHTML = '';
+
+  const catsToShow = activeCat === 'all'
+    ? CATEGORIES
+    : CATEGORIES.filter(c => c.key === activeCat);
+
+  catsToShow.forEach(cat => {
+    const items = active.filter(r => (r.category||'misc') === cat.key);
+    if (activeCat !== 'all' || items.length > 0) {
+      activeEl.appendChild(buildGroup(cat, items));
+    }
+  });
+
+  document.getElementById('archive-count').textContent = archive.length;
+  CATEGORIES.forEach(cat => {
+    const items = archive.filter(r => (r.category||'misc') === cat.key);
+    if (items.length > 0) archiveEl.appendChild(buildGroup(cat, items));
+  });
+
+  document.getElementById('processing-banner').classList.toggle('visible', allRows.some(r => r.new === 'true'));
+}
+
+// ── Load ──────────────────────────────────────────────────────
+function load() {
   fetch(CSV_URL + '?t=' + Date.now())
     .then(r => { if (!r.ok) throw new Error(r.status); return r.text(); })
     .then(text => {
       allRows = parseCSV(text);
-
-      const active = allRows.filter(r =>
-        r.archived !== 'true' &&
-        !(r.completed === 'true' && !within48h(r.completed_at))
-      );
-      const archive = allRows.filter(r =>
-        r.archived === 'true' ||
-        (r.completed === 'true' && !within48h(r.completed_at))
-      );
-
-      const activeSections = document.getElementById('active-sections');
-      activeSections.innerHTML = '';
-      CATEGORIES.forEach(({ key, label, dotClass }) => {
-        const items = active.filter(r => (r.category || 'misc') === key);
-        activeSections.appendChild(buildSection(key, label, dotClass, items));
-      });
-
-      const archiveSections = document.getElementById('archive-sections');
-      archiveSections.innerHTML = '';
-      document.getElementById('archive-count').textContent = archive.length;
-      CATEGORIES.forEach(({ key, label, dotClass }) => {
-        const items = archive.filter(r => (r.category || 'misc') === key);
-        if (items.length > 0) archiveSections.appendChild(buildSection(key, label, dotClass, items));
-      });
-
       renderUpcoming(allRows);
-      document.getElementById('last-updated').textContent =
+      renderGroups();
+      document.getElementById('last-updated-sidebar').textContent =
         'Updated ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       document.getElementById('status').style.display = 'none';
-      document.getElementById('main').style.display = 'block';
+      document.getElementById('main-content').style.display = 'block';
     })
     .catch(err => {
-      document.getElementById('status').textContent = 'Could not load todos.csv — ' + err.message;
+      document.getElementById('status').innerHTML =
+        `<div style="color:var(--text-3);padding:20px 0;font-size:12px">Could not load — ${err.message}</div>`;
     });
 }
 
 function toggleArchive() {
-  const grid = document.getElementById('archive-sections');
-  const arrow = document.getElementById('archive-arrow');
-  const open = grid.classList.toggle('open');
-  arrow.textContent = open ? '▼' : '▶';
+  const content = document.getElementById('archive-content');
+  const arrow   = document.getElementById('archive-arrow');
+  const open = content.classList.toggle('open');
+  arrow.classList.toggle('open', open);
 }
 
 load();
