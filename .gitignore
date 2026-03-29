@@ -1,0 +1,6 @@
+auth_info/
+.env
+node_modules/
+state.json
+inbox.json
+outbox.json

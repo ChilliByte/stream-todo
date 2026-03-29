@@ -1,0 +1,622 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Deep's To-Do</title>
+  <style>
+    :root {
+      --bg: #0f0f0f;
+      --surface: #1a1a1a;
+      --surface2: #242424;
+      --surface3: #2e2e2e;
+      --border: #2e2e2e;
+      --text: #e8e8e8;
+      --muted: #666;
+      --books: #7c9ff5;
+      --india-rci: #f57c7c;
+      --errands: #f5c97c;
+      --creative: #a8e6a3;
+      --misc: #c4a8e6;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'SF Pro Text', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 14px;
+      min-height: 100vh;
+      padding: 32px 24px 120px;
+    }
+
+    /* ── Header ── */
+    header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 36px;
+    }
+    header h1 { font-size: 22px; font-weight: 600; letter-spacing: -0.3px; }
+    #last-updated { font-size: 12px; color: var(--muted); flex: 1; }
+    .hdr-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      padding: 5px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 12px;
+      transition: color .15s, border-color .15s, background .15s;
+    }
+    .hdr-btn:hover { color: var(--text); border-color: #555; }
+    .hdr-btn.active {
+      background: #1e3060;
+      border-color: #7c9ff5;
+      color: #7c9ff5;
+    }
+
+    /* ── Upcoming strip ── */
+    #upcoming {
+      background: #111d35;
+      border: 1px solid #1e3060;
+      border-radius: 10px;
+      padding: 12px 16px;
+      margin-bottom: 28px;
+      display: none;
+    }
+    #upcoming h3 { font-size: 11px; text-transform: uppercase; letter-spacing: .4px; color: #7c9ff5; margin-bottom: 8px; }
+    .upcoming-item { display: flex; align-items: center; gap: 10px; padding: 4px 0; font-size: 13px; }
+    .upcoming-time { font-size: 12px; color: #7c9ff5; min-width: 100px; font-variant-numeric: tabular-nums; }
+
+    /* ── Grid ── */
+    .sections {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 20px;
+      margin-bottom: 40px;
+    }
+    .section { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+    .section-header { display: flex; align-items: center; gap: 8px; padding: 14px 16px 12px; border-bottom: 1px solid var(--border); }
+    .dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .section-header h2 { font-size: 13px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase; color: var(--muted); flex: 1; }
+    .count { font-size: 11px; color: var(--muted); background: var(--surface2); padding: 2px 7px; border-radius: 10px; }
+    .items { padding: 8px 0; min-height: 20px; }
+
+    /* ── Item ── */
+    .item {
+      display: flex;
+      align-items: flex-start;
+      gap: 10px;
+      padding: 9px 16px;
+      border-bottom: 1px solid var(--border);
+      transition: background .1s;
+      position: relative;
+    }
+    .item:last-child { border-bottom: none; }
+    .item:hover { background: var(--surface2); }
+    .item.drag-over { background: #1e3060; border-top: 2px solid #7c9ff5; }
+    .item.dragging { opacity: .4; }
+
+    /* drag handle */
+    .drag-handle {
+      display: none;
+      cursor: grab;
+      color: var(--muted);
+      font-size: 13px;
+      padding: 2px 0;
+      user-select: none;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+    .drag-handle:active { cursor: grabbing; }
+    body.edit-mode .drag-handle { display: block; }
+
+    /* checkbox */
+    .item-check {
+      display: none;
+      width: 16px;
+      height: 16px;
+      flex-shrink: 0;
+      margin-top: 2px;
+      accent-color: #7c9ff5;
+      cursor: pointer;
+    }
+    body.edit-mode .item-check { display: block; }
+
+    .item-bullet { width: 6px; height: 6px; border-radius: 50%; margin-top: 5px; flex-shrink: 0; }
+    body.edit-mode .item-bullet { display: none; }
+
+    .item-body { flex: 1; min-width: 0; }
+    .item-text { font-size: 14px; line-height: 1.4; color: var(--text); }
+    .item-text.done { text-decoration: line-through; color: var(--muted); }
+    .item-meta { display: flex; align-items: center; gap: 8px; margin-top: 3px; flex-wrap: wrap; }
+    .item-time { font-size: 11px; color: var(--muted); }
+    .badge { font-size: 10px; padding: 1px 6px; border-radius: 4px; font-weight: 500; letter-spacing: .2px; cursor: default; }
+    .badge.high    { background: #3d1a1a; color: #f57c7c; }
+    .badge.medium  { background: #2e2b1a; color: #f5c97c; }
+    .badge.low     { background: #1a2e1a; color: #a8e6a3; }
+    body.edit-mode .badge { cursor: pointer; }
+    body.edit-mode .badge:hover { filter: brightness(1.3); }
+    .reminder-tag { font-size: 11px; color: #7c9ff5; background: #1a2240; padding: 1px 6px; border-radius: 4px; }
+    body.edit-mode .reminder-tag { cursor: pointer; }
+    body.edit-mode .reminder-tag:hover { filter: brightness(1.3); }
+
+    /* edit-mode inline controls */
+    .item-edit-controls {
+      display: none;
+      gap: 6px;
+      margin-top: 6px;
+      flex-wrap: wrap;
+    }
+    body.edit-mode .item-edit-controls { display: flex; }
+    .edit-ctrl-btn {
+      font-size: 11px;
+      background: var(--surface3);
+      border: 1px solid var(--border);
+      color: var(--muted);
+      padding: 2px 8px;
+      border-radius: 5px;
+      cursor: pointer;
+      transition: color .12s, border-color .12s;
+    }
+    .edit-ctrl-btn:hover { color: var(--text); border-color: #555; }
+
+    /* ── Edit panel (bottom bar) ── */
+    #edit-panel {
+      display: none;
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      background: #13161f;
+      border-top: 1px solid #1e3060;
+      padding: 14px 24px;
+      z-index: 100;
+      gap: 12px;
+      align-items: flex-start;
+    }
+    body.edit-mode #edit-panel { display: flex; }
+    #edit-panel .panel-left { flex: 1; }
+    #edit-panel h4 { font-size: 12px; color: #7c9ff5; margin-bottom: 6px; letter-spacing: .3px; }
+    #changes-list { font-size: 12px; color: var(--muted); line-height: 1.8; }
+    #changes-list .change-line { display: flex; align-items: baseline; gap: 6px; }
+    #changes-list .change-line span { color: var(--text); }
+    #changes-empty { font-size: 12px; color: var(--muted); font-style: italic; }
+
+    .panel-actions { display: flex; flex-direction: column; gap: 8px; min-width: 160px; }
+    .panel-btn {
+      padding: 8px 16px;
+      border-radius: 7px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      transition: filter .15s;
+      text-align: center;
+    }
+    .panel-btn:hover { filter: brightness(1.1); }
+    .panel-btn.primary { background: #1e6040; color: #a8e6a3; }
+    .panel-btn.secondary { background: var(--surface2); color: var(--muted); border: 1px solid var(--border); }
+
+    /* ── WhatsApp copy modal ── */
+    #wa-modal {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,.7);
+      z-index: 200;
+      align-items: center;
+      justify-content: center;
+    }
+    #wa-modal.open { display: flex; }
+    .modal-box {
+      background: #1a1a1a;
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 24px;
+      width: 440px;
+      max-width: 92vw;
+    }
+    .modal-box h3 { font-size: 16px; margin-bottom: 6px; }
+    .modal-box p { font-size: 12px; color: var(--muted); margin-bottom: 14px; }
+    #wa-text {
+      width: 100%;
+      background: #111;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-family: monospace;
+      font-size: 13px;
+      padding: 12px;
+      resize: vertical;
+      min-height: 120px;
+    }
+    .modal-actions { display: flex; gap: 10px; margin-top: 12px; justify-content: flex-end; }
+    .modal-btn {
+      padding: 7px 16px;
+      border-radius: 7px;
+      font-size: 13px;
+      cursor: pointer;
+      border: none;
+    }
+    .modal-btn.copy { background: #7c9ff5; color: #0f0f0f; font-weight: 600; }
+    .modal-btn.close { background: var(--surface2); color: var(--muted); border: 1px solid var(--border); }
+    #copy-confirm { font-size: 12px; color: #a8e6a3; display: none; margin-top: 6px; text-align: right; }
+
+    /* ── Archive ── */
+    .archive-section { margin-top: 8px; }
+    .archive-toggle { background: none; border: none; color: var(--muted); font-size: 12px; cursor: pointer; display: flex; align-items: center; gap: 6px; padding: 4px 0; margin-bottom: 12px; transition: color .15s; }
+    .archive-toggle:hover { color: var(--text); }
+    .archive-grid { display: none; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; }
+    .archive-grid.open { display: grid; }
+    .archive-section .section { opacity: .5; }
+
+    .empty { padding: 20px 16px; color: var(--muted); font-size: 13px; text-align: center; }
+    #status { text-align: center; padding: 60px; color: var(--muted); }
+
+    .dot-books     { background: var(--books); }
+    .dot-india-rci { background: var(--india-rci); }
+    .dot-errands   { background: var(--errands); }
+    .dot-creative  { background: var(--creative); }
+    .dot-misc      { background: var(--misc); }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>To-Do</h1>
+  <span id="last-updated"></span>
+  <button id="refresh-btn" class="hdr-btn" onclick="load()">↻ Refresh</button>
+  <button id="edit-btn" class="hdr-btn" onclick="toggleEditMode()">✏ Edit</button>
+</header>
+
+<div id="upcoming"></div>
+<div id="status">Loading...</div>
+<div id="main" style="display:none">
+  <div class="sections" id="active-sections"></div>
+  <div class="archive-section">
+    <button class="archive-toggle" onclick="toggleArchive()">
+      <span id="archive-arrow">▶</span> Archive (<span id="archive-count">0</span>)
+    </button>
+    <div class="archive-grid" id="archive-sections"></div>
+  </div>
+</div>
+
+<!-- Fixed edit panel -->
+<div id="edit-panel">
+  <div class="panel-left">
+    <h4>PENDING CHANGES</h4>
+    <div id="changes-list"><span id="changes-empty">No changes yet — check items off, reorder, or adjust priorities.</span></div>
+  </div>
+  <div class="panel-actions">
+    <button class="panel-btn primary" onclick="openWAModal()">📋 Copy to WhatsApp</button>
+    <button class="panel-btn secondary" onclick="toggleEditMode()">Done editing</button>
+  </div>
+</div>
+
+<!-- WhatsApp copy modal -->
+<div id="wa-modal">
+  <div class="modal-box">
+    <h3>Send to WhatsApp</h3>
+    <p>Copy this message and paste it into your WhatsApp conversation with the bot.</p>
+    <textarea id="wa-text" readonly></textarea>
+    <p id="copy-confirm">✓ Copied to clipboard</p>
+    <div class="modal-actions">
+      <button class="modal-btn close" onclick="closeWAModal()">Close</button>
+      <button class="modal-btn copy" onclick="copyWA()">Copy message</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const CSV_URL = 'https://raw.githubusercontent.com/chillibyte/stream-todo/main/todos.csv';
+
+const CATEGORIES = [
+  { key: 'errands',   label: 'Errands',     dotClass: 'dot-errands' },
+  { key: 'books',     label: 'Books',       dotClass: 'dot-books' },
+  { key: 'india-rci', label: 'India / RCI', dotClass: 'dot-india-rci' },
+  { key: 'creative',  label: 'Creative',    dotClass: 'dot-creative' },
+  { key: 'misc',      label: 'Misc',        dotClass: 'dot-misc' },
+];
+
+const PRIORITY_CYCLE = ['high', 'medium', 'low'];
+
+let allRows = [];
+let changes = []; // { type, id, field, from, to, label }
+let dragSrcId = null;
+
+// ── CSV parsing ──────────────────────────────────────────────
+function parseCSV(text) {
+  const lines = text.trim().split('\n');
+  const headers = lines[0].split(',').map(h => h.trim());
+  return lines.slice(1).map(line => {
+    const vals = line.split(',');
+    const obj = {};
+    headers.forEach((h, i) => obj[h] = (vals[i] || '').trim());
+    return obj;
+  });
+}
+
+function esc(str) {
+  return (str||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// ── Time formatting ──────────────────────────────────────────
+function fmt(isoStr) {
+  if (!isoStr) return '';
+  const d = new Date(isoStr);
+  return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+function fmtFull(isoStr) {
+  if (!isoStr) return '';
+  const d = new Date(isoStr);
+  const today = new Date();
+  if (d.toDateString() === today.toDateString()) return 'today ' + fmt(isoStr);
+  const tom = new Date(today); tom.setDate(today.getDate() + 1);
+  if (d.toDateString() === tom.toDateString()) return 'tomorrow ' + fmt(isoStr);
+  return d.toLocaleDateString([], { day: 'numeric', month: 'short' }) + ' ' + fmt(isoStr);
+}
+function within48h(isoStr) {
+  if (!isoStr) return false;
+  return (Date.now() - new Date(isoStr).getTime()) < 48 * 3600 * 1000;
+}
+
+// ── Change tracking ──────────────────────────────────────────
+function recordChange(type, id, label, from, to) {
+  // Dedupe: replace existing change for same id+type
+  changes = changes.filter(c => !(c.id === id && c.type === type));
+  changes.push({ type, id, label, from, to });
+  renderChanges();
+}
+
+function renderChanges() {
+  const list = document.getElementById('changes-list');
+  const empty = document.getElementById('changes-empty');
+  if (changes.length === 0) {
+    list.innerHTML = '<span id="changes-empty">No changes yet — check items off, reorder, or adjust priorities.</span>';
+    return;
+  }
+  list.innerHTML = changes.map(c => {
+    let desc = '';
+    if (c.type === 'complete')  desc = `Mark done: <span>${esc(c.label)}</span>`;
+    if (c.type === 'uncomplete') desc = `Reopen: <span>${esc(c.label)}</span>`;
+    if (c.type === 'priority')  desc = `Priority → <span>${c.to}</span>: ${esc(c.label)}`;
+    if (c.type === 'reminder')  desc = `Reminder → <span>${c.to||'none'}</span>: ${esc(c.label)}`;
+    if (c.type === 'reorder')   desc = `Move <span>${esc(c.label)}</span> ${c.to}`;
+    return `<div class="change-line">· ${desc}</div>`;
+  }).join('');
+}
+
+// ── WhatsApp message generation ──────────────────────────────
+function buildWAMessage() {
+  if (changes.length === 0) return '(no changes)';
+  const lines = ['UPDATES'];
+  changes.forEach(c => {
+    if (c.type === 'complete')   lines.push(`- mark done: ${c.label}`);
+    if (c.type === 'uncomplete') lines.push(`- reopen: ${c.label}`);
+    if (c.type === 'priority')   lines.push(`- priority ${c.to}: ${c.label}`);
+    if (c.type === 'reminder')   lines.push(`- remind me about "${c.label}" at ${c.to}`);
+    if (c.type === 'reorder')    lines.push(`- move "${c.label}" ${c.to}`);
+  });
+  return lines.join('\n');
+}
+
+function openWAModal() {
+  document.getElementById('wa-text').value = buildWAMessage();
+  document.getElementById('copy-confirm').style.display = 'none';
+  document.getElementById('wa-modal').classList.add('open');
+}
+function closeWAModal() {
+  document.getElementById('wa-modal').classList.remove('open');
+}
+function copyWA() {
+  const txt = document.getElementById('wa-text').value;
+  navigator.clipboard.writeText(txt).then(() => {
+    document.getElementById('copy-confirm').style.display = 'block';
+    setTimeout(() => document.getElementById('copy-confirm').style.display = 'none', 2500);
+  });
+}
+
+// ── Edit mode ────────────────────────────────────────────────
+function toggleEditMode() {
+  const on = document.body.classList.toggle('edit-mode');
+  const btn = document.getElementById('edit-btn');
+  btn.classList.toggle('active', on);
+  btn.textContent = on ? '✕ Editing' : '✏ Edit';
+  if (!on) { changes = []; renderChanges(); }
+}
+
+// ── Build item DOM ───────────────────────────────────────────
+function buildItem(item) {
+  const isDone = item.completed === 'true';
+  const reminder = item.reminder_at;
+  const isUpcoming = reminder && new Date(reminder) > new Date() && !isDone;
+  const cat = CATEGORIES.find(c => c.key === item.category);
+
+  const div = document.createElement('div');
+  div.className = 'item';
+  div.dataset.id = item.id;
+  div.draggable = false; // enabled only in edit mode via JS
+
+  div.innerHTML = `
+    <span class="drag-handle" title="Drag to reorder">⠿</span>
+    <input type="checkbox" class="item-check" ${isDone ? 'checked' : ''} title="Mark complete" />
+    <div class="item-bullet ${cat?.dotClass || 'dot-misc'}"></div>
+    <div class="item-body">
+      <div class="item-text${isDone ? ' done' : ''}">${esc(item.raw_message)}</div>
+      <div class="item-meta">
+        <span class="item-time">${fmtFull(item.timestamp)}</span>
+        ${item.priority ? `<span class="badge ${item.priority}" title="Click in edit mode to cycle priority">${item.priority}</span>` : ''}
+        ${isUpcoming ? `<span class="reminder-tag" title="Click in edit mode to change time">⏰ ${fmtFull(reminder)}</span>` : ''}
+      </div>
+      <div class="item-edit-controls">
+        ${!item.priority ? `<button class="edit-ctrl-btn" onclick="cyclePriority(this,'${item.id}','','${esc(item.raw_message)}')">+ priority</button>` : ''}
+        ${!reminder ? `<button class="edit-ctrl-btn" onclick="editReminder('${item.id}','${esc(item.raw_message)}')">+ reminder</button>` : ''}
+        ${reminder ? `<button class="edit-ctrl-btn" onclick="editReminder('${item.id}','${esc(item.raw_message)}','${reminder}')">change reminder</button>` : ''}
+      </div>
+    </div>`;
+
+  // Checkbox toggle
+  const check = div.querySelector('.item-check');
+  check.addEventListener('change', () => {
+    const txt = div.querySelector('.item-text');
+    if (check.checked) {
+      txt.classList.add('done');
+      recordChange('complete', item.id, item.raw_message, false, true);
+    } else {
+      txt.classList.remove('done');
+      recordChange('uncomplete', item.id, item.raw_message, true, false);
+    }
+  });
+
+  // Priority badge click cycle
+  const badge = div.querySelector('.badge');
+  if (badge) {
+    badge.addEventListener('click', () => {
+      if (!document.body.classList.contains('edit-mode')) return;
+      cyclePriorityEl(badge, item.id, item.raw_message);
+    });
+  }
+
+  // Drag and drop
+  div.addEventListener('dragstart', e => {
+    dragSrcId = item.id;
+    div.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+  });
+  div.addEventListener('dragend', () => div.classList.remove('dragging'));
+  div.addEventListener('dragover', e => {
+    if (!document.body.classList.contains('edit-mode')) return;
+    e.preventDefault();
+    div.classList.add('drag-over');
+  });
+  div.addEventListener('dragleave', () => div.classList.remove('drag-over'));
+  div.addEventListener('drop', e => {
+    e.preventDefault();
+    div.classList.remove('drag-over');
+    if (dragSrcId && dragSrcId !== item.id) {
+      const srcRow = allRows.find(r => r.id === dragSrcId);
+      if (srcRow) {
+        recordChange('reorder', dragSrcId, srcRow.raw_message, null, `above "${item.raw_message}"`);
+      }
+    }
+  });
+
+  // Enable dragging only in edit mode
+  const observer = new MutationObserver(() => {
+    div.draggable = document.body.classList.contains('edit-mode');
+  });
+  observer.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+
+  return div;
+}
+
+function cyclePriorityEl(badge, id, label) {
+  const cur = badge.className.replace('badge ', '').trim();
+  const idx = PRIORITY_CYCLE.indexOf(cur);
+  const next = PRIORITY_CYCLE[(idx + 1) % PRIORITY_CYCLE.length];
+  badge.className = `badge ${next}`;
+  badge.textContent = next;
+  recordChange('priority', id, label, cur, next);
+}
+
+function editReminder(id, label, current) {
+  const val = prompt(
+    `Set reminder for "${label}"\nEnter a time or date (e.g. "5:20pm", "tomorrow 9am", "Friday 3pm"):`,
+    current ? fmtFull(current) : ''
+  );
+  if (val === null) return;
+  recordChange('reminder', id, label, current || null, val.trim() || 'remove');
+}
+
+// ── Section builder ──────────────────────────────────────────
+function buildSection(catKey, catLabel, dotClass, items) {
+  const section = document.createElement('div');
+  section.className = 'section';
+  section.innerHTML = `
+    <div class="section-header">
+      <div class="dot ${dotClass}"></div>
+      <h2>${catLabel}</h2>
+      <span class="count">${items.length}</span>
+    </div>
+    <div class="items" id="items-${catKey}"></div>`;
+  const container = section.querySelector('.items');
+  if (items.length === 0) {
+    container.innerHTML = `<div class="empty">Nothing here</div>`;
+  } else {
+    items.forEach(item => container.appendChild(buildItem(item)));
+  }
+  return section;
+}
+
+// ── Upcoming strip ───────────────────────────────────────────
+function renderUpcoming(rows) {
+  const now = new Date();
+  const upcoming = rows
+    .filter(r => r.reminder_at && new Date(r.reminder_at) > now && r.completed !== 'true')
+    .sort((a, b) => new Date(a.reminder_at) - new Date(b.reminder_at))
+    .slice(0, 5);
+  const el = document.getElementById('upcoming');
+  if (!upcoming.length) { el.style.display = 'none'; return; }
+  el.style.display = 'block';
+  el.innerHTML = `<h3>Upcoming reminders</h3>` + upcoming.map(r =>
+    `<div class="upcoming-item"><span class="upcoming-time">${fmtFull(r.reminder_at)}</span><span>${esc(r.raw_message)}</span></div>`
+  ).join('');
+}
+
+// ── Main load ────────────────────────────────────────────────
+function load() {
+  document.getElementById('status').textContent = 'Loading...';
+  document.getElementById('status').style.display = 'block';
+  document.getElementById('main').style.display = 'none';
+
+  fetch(CSV_URL + '?t=' + Date.now())
+    .then(r => { if (!r.ok) throw new Error(r.status); return r.text(); })
+    .then(text => {
+      allRows = parseCSV(text);
+
+      const active = allRows.filter(r =>
+        r.archived !== 'true' &&
+        !(r.completed === 'true' && !within48h(r.completed_at))
+      );
+      const archive = allRows.filter(r =>
+        r.archived === 'true' ||
+        (r.completed === 'true' && !within48h(r.completed_at))
+      );
+
+      const activeSections = document.getElementById('active-sections');
+      activeSections.innerHTML = '';
+      CATEGORIES.forEach(({ key, label, dotClass }) => {
+        const items = active.filter(r => (r.category || 'misc') === key);
+        activeSections.appendChild(buildSection(key, label, dotClass, items));
+      });
+
+      const archiveSections = document.getElementById('archive-sections');
+      archiveSections.innerHTML = '';
+      document.getElementById('archive-count').textContent = archive.length;
+      CATEGORIES.forEach(({ key, label, dotClass }) => {
+        const items = archive.filter(r => (r.category || 'misc') === key);
+        if (items.length > 0) archiveSections.appendChild(buildSection(key, label, dotClass, items));
+      });
+
+      renderUpcoming(allRows);
+      document.getElementById('last-updated').textContent =
+        'Updated ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      document.getElementById('status').style.display = 'none';
+      document.getElementById('main').style.display = 'block';
+    })
+    .catch(err => {
+      document.getElementById('status').textContent = 'Could not load todos.csv — ' + err.message;
+    });
+}
+
+function toggleArchive() {
+  const grid = document.getElementById('archive-sections');
+  const arrow = document.getElementById('archive-arrow');
+  const open = grid.classList.toggle('open');
+  arrow.textContent = open ? '▼' : '▶';
+}
+
+load();
+setInterval(load, 2 * 60 * 1000);
+</script>
+</body>
+</html>
