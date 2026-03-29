@@ -20,6 +20,7 @@ import dotenv from 'dotenv'
 import { parse } from 'csv-parse/sync'
 import { stringify } from 'csv-stringify/sync'
 import simpleGit from 'simple-git'
+import qrcode from 'qrcode-terminal'
 
 dotenv.config()
 
@@ -34,7 +35,7 @@ const MY_PHONE = process.env.MY_PHONE
 if (!MY_PHONE) { console.error('MY_PHONE not set in .env'); process.exit(1) }
 const MY_JID = `${MY_PHONE}@s.whatsapp.net`
 
-const git = simpleGit(process.env.GITHUB_REPO_PATH || __dirname)
+const git = simpleGit(__dirname)
 let sock = null
 
 // ── Helpers ──────────────────────────────────────────────────
@@ -230,7 +231,6 @@ async function startBot() {
   sock = makeWASocket({
     version,
     auth: state,
-    printQRInTerminal: true,
     logger: pino({ level: 'silent' }),
     browser: ['Stream Todo', 'Chrome', '1.0.0']
   })
@@ -238,7 +238,10 @@ async function startBot() {
   sock.ev.on('creds.update', saveCreds)
 
   sock.ev.on('connection.update', ({ connection, lastDisconnect, qr }) => {
-    if (qr) console.log('\n[bot] Scan the QR code above with WhatsApp on your phone.\n')
+    if (qr) {
+      console.log('\n[bot] Scan this QR code with WhatsApp on your second number:\n')
+      qrcode.generate(qr, { small: true })
+    }
     if (connection === 'open') console.log('[bot] Connected to WhatsApp ✓')
     if (connection === 'close') {
       const code = lastDisconnect?.error?.output?.statusCode
@@ -254,10 +257,10 @@ async function startBot() {
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return
     for (const msg of messages) {
-      // Only handle messages from Deep's number
-      if (msg.key.remoteJid !== MY_JID) continue
-      // Ignore our own outbound messages (except self-messages)
+      // Ignore outbound messages the bot sends
       if (msg.key.fromMe) continue
+      // Ignore group messages
+      if (msg.key.remoteJid.endsWith('@g.us')) continue
 
       const text = extractText(msg)
       if (!text.trim()) continue

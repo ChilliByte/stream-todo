@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "WhatsApp Bot",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["baileys-bot.js"],
+      "port": 0
+    },
+    {
+      "name": "Todo List (static)",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["serve", "-p", "3000", "."],
+      "port": 3000
+    }
+  ]
+}

@@ -325,12 +325,36 @@ let dragSrcId = null;
 
 // ── CSV parsing ──────────────────────────────────────────────
 function parseCSV(text) {
-  const lines = text.trim().split('\n');
-  const headers = lines[0].split(',').map(h => h.trim());
-  return lines.slice(1).map(line => {
-    const vals = line.split(',');
+  const lines = text.trim().split(/\r?\n/);
+
+  function parseLine(line) {
+    const fields = [];
+    let i = 0;
+    while (i < line.length) {
+      if (line[i] === '"') {
+        let field = '';
+        i++;
+        while (i < line.length) {
+          if (line[i] === '"' && line[i+1] === '"') { field += '"'; i += 2; }
+          else if (line[i] === '"') { i++; break; }
+          else field += line[i++];
+        }
+        fields.push(field);
+        if (line[i] === ',') i++;
+      } else {
+        const end = line.indexOf(',', i);
+        if (end === -1) { fields.push(line.slice(i).trim()); break; }
+        else { fields.push(line.slice(i, end).trim()); i = end + 1; }
+      }
+    }
+    return fields;
+  }
+
+  const headers = parseLine(lines[0]);
+  return lines.slice(1).filter(l => l.trim()).map(line => {
+    const vals = parseLine(line);
     const obj = {};
-    headers.forEach((h, i) => obj[h] = (vals[i] || '').trim());
+    headers.forEach((h, i) => obj[h] = vals[i] || '');
     return obj;
   });
 }
