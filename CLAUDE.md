@@ -109,8 +109,41 @@ Write to `profile.md` under the appropriate section. Be conservative — don't i
 
 ---
 
+## Time Handling
+
+The current time (including ISO timestamp) is always injected at the start of every processor call. Use it to:
+- Resolve relative times: "in 30 mins", "in an hour", "in 10 minutes" → calculate the exact ISO datetime
+- Resolve vague times: "this evening", "later today" → use the default times table above
+- Never store a relative time string — always convert to a concrete ISO datetime
+
+## Context and Replies
+
+The last message you sent Deep is included in every processor call. Use it to interpret replies:
+- If inbox contains "done", "sorted", "did it", "ok", "yep" — check if the last bot message references a todo_id, and mark it complete in todos.csv
+- Treat ambiguous short replies as responses to the most recent thing you said, not as new tasks
+- Never create a new todo from "done", "ok", "yes", "thanks" etc. if there's a plausible context for it
+
+## Output Rules
+
+- **Never write empty or null `text` fields to outbox.json** — skip the entry entirely instead
+- Scheduled reminders must always include `todo_id`: `[{text, send_at, todo_id}]`
+- Keep all outbox text short and spoken-friendly — messages are delivered as voice notes for longer content
+- Reactions (`🫡`) are for silent processing only. Always send them for items processed without a question.
+
 ## Files
 
 - `todos.csv` — the live task list. Read and write this.
 - `profile.md` — Deep's learned preferences. Read before processing, update after.
 - `CLAUDE.md` — this file. Do not modify it.
+
+## profile.md Format
+
+Write preferences as dated bullet points under section headers. Example:
+```
+## Reminders
+- [2024-01-15] Prefers drive-home reminders at 5:10pm not 5:20pm (3x confirmed)
+
+## Tone
+- [2024-01-20] Responds well to dry humour. Dislikes overly formal language.
+```
+Confidence levels: mark with `(1x observed)`, `(2x observed)`, `(verified)`. Only act on `(verified)` preferences. Remove entries older than 90 days that haven't been reinforced.

@@ -498,6 +498,36 @@
     .archive-content.open { display: block; }
     .archive-content .section-group { opacity: .45; }
 
+    /* ── OS dark mode ────────────────────────────────────────── */
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg:           #0c0c0e;
+        --bg-raised:    #141416;
+        --surface:      #1a1a1d;
+        --surface-2:    #222226;
+        --surface-3:    #2a2a2f;
+        --border:       #2e2e38;
+        --border-2:     #3a3a46;
+        --text:         #f0f0f2;
+        --text-2:       #8585a0;
+        --text-3:       #48485e;
+        --sidebar-bg:   #111114;
+        --sidebar-border: #1e1e28;
+        --shadow-sm:    0 1px 2px rgba(0,0,0,.3);
+        --shadow:       0 2px 8px rgba(0,0,0,.4);
+        --shadow-lg:    0 8px 32px rgba(0,0,0,.55);
+        --books:        #6b8ff0;
+        --india:        #e06b6b;
+        --errands:      #d4a847;
+        --creative:     #6bbf8a;
+        --misc:         #a87fd4;
+        --blue:         #5a7ef5;
+        --blue-dim:     rgba(90,126,245,.15);
+      }
+      .reminder-input, #wa-text { background: var(--surface-2); }
+      .drawer-btn.primary { background: #0d2b1a; color: #6bbf8a; }
+    }
+
     /* ── Responsive ──────────────────────────────────────────── */
     @media (max-width: 680px) {
       .sidebar { display: none; }
