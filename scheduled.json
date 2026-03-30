@@ -13,5 +13,10 @@
     "text": "🔍 Have a look for your Fitbit",
     "send_at": "2026-03-31T20:00:00",
     "todo_id": "37"
+  },
+  {
+    "text": "🚗 Empty the boot",
+    "send_at": "2026-03-31T08:30:00",
+    "todo_id": "60"
   }
 ]
