@@ -138,6 +138,41 @@ The last message you sent Deep is included in every processor call. Use it to in
 - Treat ambiguous short replies as responses to the most recent thing you said, not as new tasks
 - Never create a new todo from "done", "ok", "yes", "thanks" etc. if there's a plausible context for it
 
+## Research Briefs
+
+When an inbox item involves research or looking something up (e.g. "find a podiatrist", "what's the best route to Sheffield", "look up train times"), write a brief rather than just logging a reminder.
+
+### When to write a brief (no need to ask):
+- Item clearly requires research and a factual answer
+- The result would be useful to have in-app (options, prices, routes, contacts)
+
+### When to ask first:
+- Ambiguous — could be research or just a note ("sort out the dentist" → ask)
+
+### How to write a brief:
+1. Do the research (use web search / fetch as needed)
+2. Write `briefs/{todo_id}.json`:
+```json
+{
+  "title": "Short descriptive title",
+  "summary": "One sentence — the key finding",
+  "body": "Full content — options, details, prices, links. Plain text, use newlines for structure.",
+  "links": [{ "label": "Name", "url": "https://..." }],
+  "created_at": "ISO timestamp"
+}
+```
+3. Set `brief_file` = `briefs/{todo_id}.json` on the todo row in todos.csv
+
+### How to send via WhatsApp:
+- If `body` is under 400 characters → send the full content inline as a text message
+- If longer → send `summary` + `"Full brief: https://chillibyte.github.io/stream-todo/#brief-{todo_id}"`
+
+### Tone in briefs:
+- Concise and useful. Not exhaustive. Deep wants options, not essays.
+- Lead with the best option or clearest answer, then alternatives.
+
+---
+
 ## Snooze Handling
 
 If inbox contains `{ type: "snooze", todo_id, duration_hint }`:

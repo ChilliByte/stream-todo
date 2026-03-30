@@ -211,6 +211,52 @@
     .section-badge { font-size: 11px; color: var(--text-3); font-variant-numeric: tabular-nums; }
     .empty-state { padding: 12px 2px; color: var(--text-3); font-size: 12px; }
 
+    /* ── Brief cards ─────────────────────────────────────────── */
+    .brief-badge {
+      display: inline-flex; align-items: center; gap: 3px;
+      font-size: 10px; font-weight: 500;
+      background: var(--blue-dim); color: var(--blue);
+      border: 1px solid rgba(37,99,235,.2);
+      border-radius: 4px; padding: 1px 6px;
+      cursor: pointer; transition: background .1s;
+      flex-shrink: 0; white-space: nowrap;
+    }
+    .brief-badge:hover { background: rgba(37,99,235,.18); }
+    .brief-card {
+      display: none;
+      margin: 4px 0 6px 36px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--blue);
+      border-radius: var(--radius-sm);
+      padding: 12px 14px;
+      font-size: 13px;
+      box-shadow: var(--shadow-sm);
+    }
+    .brief-card.open { display: block; }
+    .brief-card-title {
+      font-weight: 600; font-size: 13px;
+      color: var(--text); margin-bottom: 6px;
+    }
+    .brief-card-summary {
+      color: var(--blue); font-size: 12px;
+      margin-bottom: 8px; font-style: italic;
+    }
+    .brief-card-body {
+      color: var(--text-2); font-size: 12px; line-height: 1.6;
+      white-space: pre-wrap; margin-bottom: 8px;
+    }
+    .brief-card-links { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .brief-card-link {
+      font-size: 11px; color: var(--blue);
+      text-decoration: none; background: var(--blue-dim);
+      padding: 3px 8px; border-radius: 4px;
+      border: 1px solid rgba(37,99,235,.2);
+    }
+    .brief-card-link:hover { background: rgba(37,99,235,.18); }
+    .brief-card-meta { font-size: 10px; color: var(--text-3); margin-top: 8px; }
+    .brief-loading { color: var(--text-3); font-size: 12px; font-style: italic; }
+
     /* ── Item rows ───────────────────────────────────────────── */
     .item {
       display: flex;
@@ -631,7 +677,11 @@
 </div>
 
 <script>
-const CSV_URL = 'https://raw.githubusercontent.com/chillibyte/stream-todo/main/todos.csv';
+const CSV_URL    = 'https://raw.githubusercontent.com/chillibyte/stream-todo/main/todos.csv';
+const BRIEFS_URL = 'https://raw.githubusercontent.com/chillibyte/stream-todo/main/';
+const PAGES_URL  = 'https://chillibyte.github.io/stream-todo/';
+
+const briefCache = {}; // id → brief JSON (or 'loading' / 'error')
 
 // Known categories with fixed brand colours (defined order)
 const KNOWN_CATEGORIES = {
@@ -807,7 +857,8 @@ function renderChanges() {
 function rebuildItem(id) {
   const item = allRows.find(r => r.id === id);
   if (!item) return;
-  const existing = document.querySelector(`.item[data-id="${id}"]`);
+  const existing = document.querySelector(`.item-wrap[data-id="${id}"]`) ||
+                   document.querySelector(`.item[data-id="${id}"]`);
   if (!existing) return;
   const newEl = buildItem(item);
   existing.replaceWith(newEl);
@@ -1015,6 +1066,11 @@ function buildItem(item) {
   const isUpcoming = reminder && new Date(reminder) > new Date() && !isDone;
   const cat        = CATEGORIES.find(c => c.key === item.category);
   const priority   = item.priority || '';
+  const hasBrief   = !!item.brief_file;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'item-wrap';
+  wrap.dataset.id = item.id;
 
   const div = document.createElement('div');
   div.className = 'item';
@@ -1037,6 +1093,7 @@ function buildItem(item) {
         <span class="item-time">${fmtAge(item.timestamp)}</span>
         ${priority ? `<span class="badge ${priority}">${priority}</span>` : ''}
         ${isUpcoming ? `<span class="reminder-tag">⏰ ${fmtFull(reminder)}</span>` : ''}
+        ${hasBrief ? `<button class="brief-badge" data-id="${item.id}" data-file="${esc(item.brief_file)}">📋 Brief</button>` : ''}
       </div>
     </div>
     <div class="item-actions">
@@ -1044,6 +1101,14 @@ function buildItem(item) {
       <button class="act-btn act-reminder" title="Set reminder">⏰</button>
       <button class="act-btn act-archive"  title="Archive">Archive</button>
     </div>`;
+
+  // Brief card slot (hidden until toggled)
+  const briefCard = document.createElement('div');
+  briefCard.className = 'brief-card';
+  briefCard.id = `brief-${item.id}`;
+
+  wrap.appendChild(div);
+  if (hasBrief) wrap.appendChild(briefCard);
 
   // ── Checkbox ──
   div.querySelector('.item-check').addEventListener('change', e => {
@@ -1126,8 +1191,77 @@ function buildItem(item) {
     div.draggable = document.body.classList.contains('edit-mode');
   }).observe(document.body, { attributes: true, attributeFilter: ['class'] });
 
-  return div;
+  // Brief badge toggle
+  if (hasBrief) {
+    div.querySelector('.brief-badge').addEventListener('click', e => {
+      e.stopPropagation();
+      toggleBriefCard(item.id, item.brief_file, briefCard);
+    });
+  }
+
+  return wrap;
 }
+
+// ── Brief cards ───────────────────────────────────────────────
+
+function renderBriefCard(el, brief) {
+  const links = (brief.links || []).map(l =>
+    `<a class="brief-card-link" href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.label)}</a>`
+  ).join('');
+  el.innerHTML = `
+    <div class="brief-card-title">${esc(brief.title || '')}</div>
+    ${brief.summary ? `<div class="brief-card-summary">${esc(brief.summary)}</div>` : ''}
+    ${brief.body    ? `<div class="brief-card-body">${esc(brief.body)}</div>` : ''}
+    ${links ? `<div class="brief-card-links">${links}</div>` : ''}
+    <div class="brief-card-meta">Brief · ${brief.created_at ? new Date(brief.created_at).toLocaleDateString([], { day:'numeric', month:'short', year:'numeric' }) : ''}</div>
+  `;
+}
+
+async function toggleBriefCard(id, file, el) {
+  if (el.classList.contains('open')) {
+    el.classList.remove('open');
+    return;
+  }
+  el.classList.add('open');
+  if (briefCache[id] && briefCache[id] !== 'loading') {
+    renderBriefCard(el, briefCache[id]);
+    return;
+  }
+  el.innerHTML = '<div class="brief-loading">Loading brief…</div>';
+  try {
+    const res = await fetch(BRIEFS_URL + file + '?t=' + Date.now());
+    if (!res.ok) throw new Error(res.status);
+    const brief = await res.json();
+    briefCache[id] = brief;
+    if (el.classList.contains('open')) renderBriefCard(el, brief);
+  } catch (e) {
+    briefCache[id] = 'error';
+    el.innerHTML = `<div class="brief-loading">Could not load brief — ${e.message}</div>`;
+  }
+}
+
+function openBriefById(id) {
+  // Wait for render then open
+  const attempt = () => {
+    const card = document.getElementById(`brief-${id}`);
+    const wrap = document.querySelector(`.item-wrap[data-id="${id}"]`);
+    if (card && wrap) {
+      card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const item = allRows.find(r => r.id === id);
+      if (item?.brief_file) toggleBriefCard(id, item.brief_file, card);
+    } else {
+      setTimeout(attempt, 300);
+    }
+  };
+  attempt();
+}
+
+// Hash routing — #brief-{id}
+function handleHash() {
+  const m = location.hash.match(/^#brief-(\d+)$/);
+  if (m) openBriefById(m[1]);
+}
+window.addEventListener('hashchange', handleHash);
 
 // ── Section group ─────────────────────────────────────────────
 function buildGroup(cat, items) {
@@ -1229,6 +1363,7 @@ function load() {
         'Updated ' + new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
       document.getElementById('status').style.display = 'none';
       document.getElementById('main-content').style.display = 'block';
+      handleHash();
     })
     .catch(err => {
       document.getElementById('status').innerHTML =

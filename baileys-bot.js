@@ -37,6 +37,7 @@ const OUTBOX_PATH    = path.join(__dirname, 'outbox.json')
 const MSGKEYS_PATH   = path.join(__dirname, 'message_keys.json')
 const SCHEDULED_PATH = path.join(__dirname, 'scheduled.json')
 const AUTH_DIR       = path.join(__dirname, 'auth_info')
+const BRIEFS_DIR     = path.join(__dirname, 'briefs')
 
 const MY_PHONE = process.env.MY_PHONE
 if (!MY_PHONE) { console.error('MY_PHONE not set in .env'); process.exit(1) }
@@ -94,7 +95,7 @@ function readCSV() {
 function writeCSV(rows) {
   const out = stringify(rows, {
     header: true, quoted_string: true,
-    columns: ['id','timestamp','raw_message','category','priority','new','reminder_at','completed','completed_at','archived']
+    columns: ['id','timestamp','raw_message','category','priority','new','reminder_at','completed','completed_at','archived','brief_file']
   })
   fs.writeFileSync(CSV_PATH, out)
 }
@@ -265,7 +266,7 @@ function buildProcessorPrompt() {
     'For questions/messages: outbox.json [{to:"' + MY_PHONE + '@s.whatsapp.net",text:"<short spoken-friendly message>",pending_question_item_id:"<id or null>"}].',
     'Scheduled reminders: scheduled.json [{text:"<spoken-friendly reminder>",send_at:"<ISO>",todo_id:"<id>"}] — ALWAYS include todo_id.',
     'After processing, update todos.csv and profile.md.',
-    'Then run: git -C "' + __dirname.replace(/\\/g, '\\\\') + '" add todos.csv profile.md outbox.json scheduled.json inbox.json && git -C "' + __dirname.replace(/\\/g, '\\\\') + '" commit -m "secretary" && git -C "' + __dirname.replace(/\\/g, '\\\\') + '" push'
+    'Then run: git -C "' + __dirname.replace(/\\/g, '\\\\') + '" add todos.csv profile.md outbox.json scheduled.json inbox.json briefs/ && git -C "' + __dirname.replace(/\\/g, '\\\\') + '" commit -m "secretary" && git -C "' + __dirname.replace(/\\/g, '\\\\') + '" push'
   ].filter(Boolean).join(' ')
 }
 
@@ -430,7 +431,7 @@ async function handleMessage(msg, text) {
   rows.push({
     id: newId, timestamp: new Date().toISOString(), raw_message: text,
     category: '', priority: '', new: 'true', reminder_at: '',
-    completed: 'false', completed_at: '', archived: 'false'
+    completed: 'false', completed_at: '', archived: 'false', brief_file: ''
   })
   writeCSV(rows)
 
@@ -648,6 +649,8 @@ async function startBot() {
     clearTimeout(watchDebounce)
     watchDebounce = setTimeout(() => processOutbox().catch(console.error), 300)
   })
+
+  if (!fs.existsSync(BRIEFS_DIR)) fs.mkdirSync(BRIEFS_DIR, { recursive: true })
 
   console.log('[bot] Stream Bot starting...')
   console.log('[bot] claude.exe:', findClaudeExe())
