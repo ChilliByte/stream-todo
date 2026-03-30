@@ -194,13 +194,24 @@ function storeLastBotMessage(text, todoId = null) {
 // Detect "Done", "did it", "ok", "sorted", etc.
 const COMPLETION_RE = /^(done|did it|yep|yeah|yea|ok|okay|got it|finished|sorted|complete[d]?|✅|👍)[\s!.]*$/i
 
-// ── Typing indicator ──────────────────────────────────────────
+// ── Typing indicator (refreshes every 20s — WhatsApp expires after ~30s) ──
+
+let _typingInterval = null
+let _typingJid = null
 
 function showTyping(jid) {
+  _typingJid = jid
   sock?.sendPresenceUpdate('composing', jid).catch(() => {})
+  clearInterval(_typingInterval)
+  _typingInterval = setInterval(() => {
+    sock?.sendPresenceUpdate('composing', jid).catch(() => {})
+  }, 20000)
 }
 function clearTyping(jid) {
-  sock?.sendPresenceUpdate('paused', jid).catch(() => {})
+  clearInterval(_typingInterval)
+  _typingInterval = null
+  _typingJid = null
+  sock?.sendPresenceUpdate('paused', jid || MY_JID).catch(() => {})
 }
 
 // ── Processor ─────────────────────────────────────────────────
@@ -439,7 +450,9 @@ async function startBot() {
 
   // ── Incoming messages ──
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return
+    // 'notify' = new message. 'append' = delivered while offline (reconnect).
+    // Both are processed; seenMsgIds deduplicates.
+    if (type !== 'notify' && type !== 'append') return
     for (const msg of messages) {
       if (msg.key.fromMe) continue
       if (msg.key.remoteJid?.endsWith('@g.us')) continue
