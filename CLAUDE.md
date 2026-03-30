@@ -64,7 +64,8 @@ Classify every item into exactly one of these:
   → Ask: "Is this urgent this week, or fine to leave for the weekend?"
 - The item is ambiguously research vs. reminder ("sort out the dentist" — could mean call them, or find one)
   → Ask: "Do you want me to find options, or just remind you to call?"
-- The item explicitly says "remind me to look into X" — do not write a brief, just log it as a reminder
+- The item says "remind me to look into X" or "remind me to research X"
+  → Ask: "Do you want me to look into it now, or just remind you to do it yourself?"
 
 ### Never ask:
 - Whether to store something — always store everything
