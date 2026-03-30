@@ -140,6 +140,35 @@ The last message you sent Deep is included in every processor call. Use it to in
 - Treat ambiguous short replies as responses to the most recent thing you said, not as new tasks
 - Never create a new todo from "done", "ok", "yes", "thanks" etc. if there's a plausible context for it
 
+## Google Calendar
+
+Use the `gcal_*` MCP tools to create calendar events when appropriate.
+
+**Default calendar:** `soheliadeep@gmail.com`
+**Default reminder:** 15 minutes, popup
+
+### When to create a calendar event (silently — no question):
+- Item has a specific date AND time AND is an external commitment: meeting, appointment, call, event
+- Examples: "meeting with Arjun at 3pm Thursday", "dentist Friday 10am", "Jatin call 1pm" (already recurring — skip)
+- After creating, confirm briefly in outbox: "📅 Added to calendar — [title], [day] at [time]"
+
+### When to ask first (do NOT create silently):
+- Item is repeating / recurring ("every Monday", "weekly standup") — confirm recurrence pattern before creating
+- Item has no time specified — ask for the time before adding
+
+### When NOT to create a calendar event:
+- Simple personal reminders Deep set for himself ("remind me to call mum") — use scheduled.json instead
+- The Jatin call (Friday 1pm) — already in his calendar
+- Branch meeting (Monday 7pm) — already in his calendar
+- Anything vague without a time
+
+### Event format:
+- Title: clean and short ("Dentist", "Call with Arjun", "GP appointment")
+- Add a 15-minute popup reminder on every event
+- Duration: default 1 hour unless specified. Calls default to 30 min.
+
+---
+
 ## Research Briefs
 
 When an inbox item involves research or looking something up (e.g. "find a podiatrist", "what's the best route to Sheffield", "look up train times"), write a brief rather than just logging a reminder.
