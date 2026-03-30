@@ -6,7 +6,7 @@
 "5","2026-03-29T15:00:00","Renew car insurance","errands","high","false","2026-03-30T09:00:00","false","","true",
 "6","2026-03-29T19:25:01.951Z","Get oats","errands","medium","false","2026-03-29T20:45:00","false","","true",
 "7","2026-03-29T19:25:52.766Z","Remind me at 8:45 to go to the shops","misc","low","false","","true","2026-03-29T20:45:00","false",
-"9","2026-03-29T19:46:34.359Z","Charge drill battery","errands","low","false","2026-03-30T09:00:00","false","","false",
+"9","2026-03-29T19:46:34.359Z","Charge drill battery","errands","low","false","2026-03-30T09:00:00","true","2026-03-30T12:37:13.235Z","false",
 "15","2026-03-29T20:47:08.499Z","Pick up milk, squash, oats and toilet paper","errands","medium","false","2026-03-31T17:20:00","false","","false",
 "16","2026-03-29T20:47:45.508Z","Close living room windows","misc","low","false","2026-03-29T21:55:00","false","","true",
 "23","2026-03-29T21:05:06.864Z","Close bedroom window","misc","low","false","2026-03-29T22:05:00","false","","true",
@@ -18,7 +18,7 @@
 "30","2026-03-29T21:51:41.399Z","Also delete all the light and window based ones","misc","low","false","","false","","true",
 "31","2026-03-29T21:57:46.835Z","Write India meeting report","india-rci","high","false","2026-03-30T09:15:00","false","","false",
 "32","2026-03-29T21:58:50.423Z","Check with Joe about reporting at morning meeting","india-rci","medium","false","2026-03-30T09:15:00","false","","true",
-"33","2026-03-29T21:59:06.509Z","Speak to Maarten about Venezuela epub","books","medium","false","2026-03-30T09:15:00","false","","false",
+"33","2026-03-29T21:59:06.509Z","Speak to Maarten about Venezuela epub","books","medium","false","2026-04-01T10:00:00","false","","false",
 "34","2026-03-29T22:24:28.039Z","Pack lunch","errands","low","false","2026-03-30T08:00:00","false","","true",
 "35","2026-03-29T22:24:40.769Z","Send day summary","misc","low","false","2026-03-30T08:30:00","false","","true",
 "36","2026-03-29T22:27:18.551Z","How many items on my to-do list?","misc","low","false","","false","","true",
@@ -28,7 +28,7 @@
 "40","2026-03-29T23:09:32.978Z","Hello","misc","low","false","","false","","true",
 "41","2026-03-29T23:09:50.425Z","Tell me the most recent added item","misc","low","false","","false","","true",
 "42","2026-03-29T23:12:33.070Z","Go to bed","misc","low","false","2026-03-29T23:17:00","false","","true",
-"43","2026-03-29T23:22:28.254Z","Buy airbox grommet","errands","low","false","2026-03-30T17:20:00","false","","false",
+"43","2026-03-29T23:22:28.254Z","Buy airbox grommet","errands","low","false","2026-03-31T12:45:00","false","","false",
 "44","2026-03-29T23:22:38.489Z","Also, how many things are on my agenda for tomorrow morning?","misc","low","false","","false","","true",
 "45","2026-03-29T23:31:44.329Z","Go to bed","misc","low","false","2026-03-29T23:34:44","false","","true",
 "46","2026-03-29T23:50:37.029Z","Turn the TV off","misc","low","false","2026-03-29T23:53:37","false","","true",
@@ -46,6 +46,6 @@
 "58","2026-03-30T10:38:36.753Z","Are you working","misc","low","false","","true","2026-03-30T11:35:05.687Z","true",
 "59","2026-03-30T12:16:17.932Z","whats on my todo today?","misc","low","false","","true","2026-03-30T12:23:01.316Z","false",
 "60","2026-03-30T12:23:01.311Z","Empty the boot","errands","low","false","2026-03-31T08:30:00","false","","false",
-"61","2026-03-30T12:26:54.081Z","Spoke to Maarten, bump back to weds 10am. Drill battery done. Airbox grommet tomorrow 12:45.","","","true","","false","","false",
-"62","2026-03-30T12:27:43.877Z","Can you have a look for the grommet part and a paint pen for my car too? Green fiat 500 2014 I think paint code 166","","","true","","false","","false",
-"63","2026-03-30T12:37:13.230Z","add go to mechanic as a calendar item friday mornign 9am","","","true","","false","","false",""
+"61","2026-03-30T12:26:54.081Z","Spoke to Maarten, bump back to weds 10am. Drill battery done. Airbox grommet tomorrow 12:45.","misc","low","false","","true","2026-03-30T12:37:13.235Z","true",
+"62","2026-03-30T12:27:43.877Z","Research Fiat 500 parts: airbox grommet and paint pen (code 166B)","errands","low","false","","true","2026-03-30T12:37:13.235Z","false","briefs/62.json"
+"63","2026-03-30T12:37:13.230Z","Go to mechanic — calendar event Friday 9am","errands","low","false","","true","2026-03-30T12:37:13.235Z","true",""
