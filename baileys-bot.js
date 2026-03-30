@@ -4,6 +4,7 @@
  * sends outbound messages and reminders as voice notes.
  */
 
+import http from 'http'
 import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
@@ -270,16 +271,42 @@ function buildProcessorPrompt() {
   ].filter(Boolean).join(' ')
 }
 
+let _processorRunning = false
+
 function runProcessor() {
+  if (_processorRunning) { console.log('[bot] Processor already running, skipping'); return }
   let claudeExe
   try { claudeExe = findClaudeExe() }
   catch (e) { console.error('[processor]', e.message); return }
 
-  const proc = spawn(claudeExe, ['--print', '--dangerously-skip-permissions', buildProcessorPrompt()], {
-    cwd: __dirname, detached: true, stdio: 'ignore', env: process.env
+  _processorRunning = true
+
+  // Write prompt to file — avoids quote mangling when shell parses the command line
+  const promptFile = path.join(__dirname, 'processor_prompt.txt')
+  fs.writeFileSync(promptFile, buildProcessorPrompt(), 'utf8')
+
+  const logPath = path.join(__dirname, 'processor.log')
+
+  // Pass a simple, quote-free instruction pointing to the prompt file
+  const safeArg = 'Read the file processor_prompt.txt in the current directory and follow the instructions in it exactly.'
+  const proc = spawn(claudeExe, ['--print', '--dangerously-skip-permissions', safeArg], {
+    cwd: __dirname, windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe'], env: process.env
   })
-  proc.unref()
-  console.log('[bot] Processor invoked')
+
+  const log = fs.createWriteStream(logPath, { flags: 'a' })
+  proc.stdout?.pipe(log)
+  proc.stderr?.pipe(log)
+
+  proc.on('error', e => { _processorRunning = false; console.error('[processor] spawn error:', e.message) })
+  proc.on('close', code => {
+    _processorRunning = false
+    log.end()
+    console.log(`[bot] Processor exited (code ${code})`)
+    processOutbox().catch(console.error)
+  })
+
+  console.log('[bot] Processor invoked (pid ' + proc.pid + ')')
 }
 
 // ── Nightly cleanup ───────────────────────────────────────────
@@ -656,9 +683,143 @@ async function startBot() {
   console.log('[bot] claude.exe:', findClaudeExe())
 }
 
+// ── Local web server (localhost:3001) ─────────────────────────
+
+const LOCAL_PORT = 3001
+
+const LOCAL_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Stream — Quick Add</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    background:#f5f5f8;display:flex;align-items:center;justify-content:center;
+    min-height:100vh;padding:24px}
+  .card{background:#fff;border-radius:12px;box-shadow:0 2px 16px rgba(0,0,0,.08);
+    padding:28px 32px;width:100%;max-width:520px}
+  h1{font-size:16px;font-weight:600;color:#111;margin-bottom:4px}
+  .sub{font-size:12px;color:#999;margin-bottom:20px}
+  textarea{width:100%;border:1px solid #e0e0e9;border-radius:8px;padding:12px 14px;
+    font-family:inherit;font-size:14px;resize:none;height:90px;outline:none;
+    transition:border .15s;color:#111}
+  textarea:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.1)}
+  button{margin-top:12px;width:100%;background:#2563eb;color:#fff;border:none;
+    border-radius:8px;padding:11px;font-size:14px;font-weight:500;cursor:pointer;
+    transition:background .15s}
+  button:hover{background:#1d4ed8}
+  button:disabled{background:#93c5fd;cursor:default}
+  .toast{display:none;margin-top:12px;padding:10px 14px;border-radius:8px;
+    font-size:13px;text-align:center}
+  .toast.ok{background:#dcfce7;color:#166534;display:block}
+  .toast.err{background:#fee2e2;color:#991b1b;display:block}
+  .link{margin-top:16px;text-align:center;font-size:12px;color:#999}
+  .link a{color:#2563eb;text-decoration:none}
+</style>
+</head>
+<body>
+<div class="card">
+  <h1>Stream</h1>
+  <div class="sub">Add a task or ask Deep's secretary anything</div>
+  <textarea id="t" placeholder="Get milk on the way home&#10;Find a dentist near Balham&#10;Meeting with Arjun Thursday 3pm" autofocus></textarea>
+  <button id="btn" onclick="send()">Add</button>
+  <div class="toast" id="toast"></div>
+  <div class="link"><a href="https://chillibyte.github.io/stream-todo/" target="_blank">Open full dashboard →</a></div>
+</div>
+<script>
+  const t = document.getElementById('t')
+  const btn = document.getElementById('btn')
+  const toast = document.getElementById('toast')
+  t.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) send()
+  })
+  async function send() {
+    const text = t.value.trim()
+    if (!text) return
+    btn.disabled = true
+    btn.textContent = 'Sending…'
+    toast.className = 'toast'
+    try {
+      const r = await fetch('/add', { method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({text})
+      })
+      if (!r.ok) throw new Error(await r.text())
+      toast.textContent = '✓ Added — Claude is processing'
+      toast.className = 'toast ok'
+      t.value = ''
+      t.focus()
+    } catch(e) {
+      toast.textContent = 'Error: ' + e.message
+      toast.className = 'toast err'
+    }
+    btn.disabled = false
+    btn.textContent = 'Add'
+  }
+</script>
+</body>
+</html>`
+
+function startLocalServer() {
+  const server = http.createServer((req, res) => {
+    // Only accept localhost
+    const host = req.headers.host || ''
+    if (!host.startsWith('localhost') && !host.startsWith('127.')) {
+      res.writeHead(403).end('Forbidden')
+      return
+    }
+
+    if (req.method === 'GET' && req.url === '/') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+      res.end(LOCAL_HTML)
+      return
+    }
+
+    if (req.method === 'POST' && req.url === '/add') {
+      let body = ''
+      req.on('data', d => { body += d })
+      req.on('end', () => {
+        try {
+          const { text } = JSON.parse(body)
+          if (!text?.trim()) { res.writeHead(400).end('No text'); return }
+
+          // Write to CSV and trigger processor — same path as WhatsApp messages
+          const rows  = readCSV()
+          const newId = String(nextId(rows))
+          rows.push({
+            id: newId, timestamp: new Date().toISOString(), raw_message: text.trim(),
+            category: '', priority: '', new: 'true', reminder_at: '',
+            completed: 'false', completed_at: '', archived: 'false', brief_file: ''
+          })
+          writeCSV(rows)
+          gitSync(`add: ${text.trim().slice(0, 40)}`).catch(() => {})
+          runProcessor()
+          console.log(`[local] Added #${newId}: "${text.trim()}"`)
+
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ ok: true, id: newId }))
+        } catch (e) {
+          res.writeHead(500).end(e.message)
+        }
+      })
+      return
+    }
+
+    res.writeHead(404).end('Not found')
+  })
+
+  server.listen(LOCAL_PORT, '127.0.0.1', () => {
+    console.log(`[local] Server running at http://localhost:${LOCAL_PORT}`)
+  })
+  server.on('error', e => console.error('[local]', e.message))
+}
+
 // Safety-net polling (file watcher is primary, this catches edge cases)
 setInterval(() => processOutbox().catch(console.error), 5000)
 setInterval(() => checkScheduled().catch(console.error), 30000)
 setInterval(() => checkCleanup().catch(console.error), 60000) // nightly at 11pm
 
+startLocalServer()
 startBot().catch(console.error)
