@@ -548,36 +548,7 @@
     </div>
     <nav class="sidebar-nav">
       <div class="nav-label">Categories</div>
-      <div class="nav-item active" data-cat="all" onclick="filterCat('all',this)">
-        <span class="nav-dot" style="background:var(--text-3)"></span>
-        All
-        <span class="nav-count" id="count-all">–</span>
-      </div>
-      <div class="nav-item" data-cat="errands" onclick="filterCat('errands',this)">
-        <span class="nav-dot" style="background:var(--errands)"></span>
-        Errands
-        <span class="nav-count" id="count-errands">–</span>
-      </div>
-      <div class="nav-item" data-cat="books" onclick="filterCat('books',this)">
-        <span class="nav-dot" style="background:var(--books)"></span>
-        Books
-        <span class="nav-count" id="count-books">–</span>
-      </div>
-      <div class="nav-item" data-cat="india-rci" onclick="filterCat('india-rci',this)">
-        <span class="nav-dot" style="background:var(--india)"></span>
-        India / RCI
-        <span class="nav-count" id="count-india-rci">–</span>
-      </div>
-      <div class="nav-item" data-cat="creative" onclick="filterCat('creative',this)">
-        <span class="nav-dot" style="background:var(--creative)"></span>
-        Creative
-        <span class="nav-count" id="count-creative">–</span>
-      </div>
-      <div class="nav-item" data-cat="misc" onclick="filterCat('misc',this)">
-        <span class="nav-dot" style="background:var(--misc)"></span>
-        Misc
-        <span class="nav-count" id="count-misc">–</span>
-      </div>
+      <div id="cat-nav"></div>
     </nav>
     <div class="sidebar-footer">
       <div id="last-updated-sidebar"></div>
@@ -662,13 +633,60 @@
 <script>
 const CSV_URL = 'https://raw.githubusercontent.com/chillibyte/stream-todo/main/todos.csv';
 
-const CATEGORIES = [
-  { key: 'errands',   label: 'Errands',     color: 'var(--errands)' },
-  { key: 'books',     label: 'Books',       color: 'var(--books)'   },
-  { key: 'india-rci', label: 'India / RCI', color: 'var(--india)'   },
-  { key: 'creative',  label: 'Creative',    color: 'var(--creative)'},
-  { key: 'misc',      label: 'Misc',        color: 'var(--misc)'    },
-];
+// Known categories with fixed brand colours (defined order)
+const KNOWN_CATEGORIES = {
+  'errands':   { label: 'Errands',     color: 'var(--errands)'  },
+  'books':     { label: 'Books',       color: 'var(--books)'    },
+  'india-rci': { label: 'India / RCI', color: 'var(--india)'    },
+  'creative':  { label: 'Creative',    color: 'var(--creative)' },
+  'misc':      { label: 'Misc',        color: 'var(--misc)'     },
+};
+const KNOWN_ORDER = ['errands', 'books', 'india-rci', 'creative', 'misc'];
+
+// Dynamic CATEGORIES — rebuilt from CSV on every load
+let CATEGORIES = Object.entries(KNOWN_CATEGORIES).map(([key, v]) => ({ key, ...v }));
+
+function catColorFromHash(key) {
+  let hash = 5381;
+  for (let i = 0; i < key.length; i++) hash = (hash * 33) ^ key.charCodeAt(i);
+  const hue = Math.abs(hash) % 360;
+  return `hsl(${hue}, 50%, 42%)`;
+}
+
+function buildCategories(rows) {
+  const seen = new Set(rows.map(r => r.category || 'misc').filter(Boolean));
+  // Known categories first, in defined order, only if present in data
+  const known = KNOWN_ORDER
+    .filter(k => seen.has(k))
+    .map(k => ({ key: k, ...KNOWN_CATEGORIES[k] }));
+  // Unknown categories — sorted alphabetically, colour from hash
+  const unknown = [...seen]
+    .filter(k => !KNOWN_CATEGORIES[k])
+    .sort()
+    .map(k => ({ key: k, label: k.charAt(0).toUpperCase() + k.slice(1).replace(/-/g, ' '), color: catColorFromHash(k) }));
+  // Always include misc as a fallback even if empty
+  CATEGORIES = [...known, ...unknown];
+  if (!CATEGORIES.find(c => c.key === 'misc')) {
+    CATEGORIES.push({ key: 'misc', ...KNOWN_CATEGORIES['misc'] });
+  }
+  return CATEGORIES;
+}
+
+function renderSidebar(cats) {
+  document.getElementById('cat-nav').innerHTML = `
+    <div class="nav-item ${activeCat === 'all' ? 'active' : ''}" data-cat="all" onclick="filterCat('all',this)">
+      <span class="nav-dot" style="background:var(--text-3)"></span>
+      All
+      <span class="nav-count" id="count-all">–</span>
+    </div>
+    ${cats.map(c => `
+      <div class="nav-item ${activeCat === c.key ? 'active' : ''}" data-cat="${c.key}" onclick="filterCat('${c.key}',this)">
+        <span class="nav-dot" style="background:${c.color}"></span>
+        ${esc(c.label)}
+        <span class="nav-count" id="count-${c.key}">–</span>
+      </div>`).join('')}
+  `;
+}
 
 const PRIORITY_COLORS = { high: 'var(--india)', medium: 'var(--errands)', low: 'var(--creative)' };
 const PRIORITY_LABELS = { high: 'H', medium: 'M', low: 'L' };
@@ -1203,6 +1221,8 @@ function load() {
     .then(r => { if (!r.ok) throw new Error(r.status); return r.text(); })
     .then(text => {
       allRows = parseCSV(text);
+      buildCategories(allRows);
+      renderSidebar(CATEGORIES);
       renderUpcoming(allRows);
       renderGroups();
       document.getElementById('last-updated-sidebar').textContent =

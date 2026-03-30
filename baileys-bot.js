@@ -50,8 +50,12 @@ const VOICE_MIN_LENGTH = 30 // below this, always send text regardless of voice 
 const git = simpleGit(__dirname)
 let sock = null
 
-// Track bot's own 👍 acks so we don't confuse them with user reactions
-const botAcks = new Map() // msg_id → timestamp ms
+// Ping / thanks patterns — handled immediately without Claude
+const PING_RE   = /^(hey|hello|hi|test|are you (there|on|alive|up)|ping|you there|u there)[\s?!.]*$/i
+const THANKS_RE = /^(thanks?|thank you|cheers|ta|ty|appreciate it|nice one|legend)[\s!.]*$/i
+
+// Pending hourglass reactions: msgKeyId → { msgKey, jid, timer, isSet }
+const pendingHourglass = new Map()
 
 // ── Find claude.exe (scan for latest installed version) ───────
 
@@ -194,6 +198,9 @@ function storeLastBotMessage(text, todoId = null) {
 // Detect "Done", "did it", "ok", "sorted", etc.
 const COMPLETION_RE = /^(done|did it|yep|yeah|yea|ok|okay|got it|finished|sorted|complete[d]?|✅|👍)[\s!.]*$/i
 
+// Detect snooze requests — "snooze", "snooze 2h", "snooze until 3pm", etc.
+const SNOOZE_RE = /^snooze(\s+(.+?))?[\s!.]*$/i
+
 // ── Typing indicator (refreshes every 20s — WhatsApp expires after ~30s) ──
 
 let _typingInterval = null
@@ -212,6 +219,21 @@ function clearTyping(jid) {
   _typingInterval = null
   _typingJid = null
   sock?.sendPresenceUpdate('paused', jid || MY_JID).catch(() => {})
+}
+
+// ── Hourglass reaction (fires 5s after runProcessor, only if still pending) ──
+
+function scheduleHourglass(msg, jid) {
+  const msgKey = msg.key
+  const timer = setTimeout(() => {
+    const entry = pendingHourglass.get(msgKey.id)
+    if (entry) {
+      entry.isSet = true
+      sock?.sendMessage(jid, { react: { text: '⏳', key: msgKey } }).catch(() => {})
+      console.log('[bot] ⏳ hourglass set (Claude still processing)')
+    }
+  }, 5000)
+  pendingHourglass.set(msgKey.id, { msgKey, jid, timer, isSet: false })
 }
 
 // ── Processor ─────────────────────────────────────────────────
@@ -259,6 +281,54 @@ function runProcessor() {
   console.log('[bot] Processor invoked')
 }
 
+// ── Nightly cleanup ───────────────────────────────────────────
+
+function buildCleanupPrompt() {
+  const now = new Date()
+  const timeStr = now.toLocaleString('en-GB', {
+    timeZone: 'Europe/London',
+    weekday: 'short', day: 'numeric', month: 'short',
+    hour: '2-digit', minute: '2-digit'
+  })
+  return [
+    `Current time: ${timeStr} (ISO: ${now.toISOString()}).`,
+    'This is a nightly maintenance run. Read todos.csv and profile.md.',
+    'RULES — be conservative. When in doubt, do nothing and ask.',
+    '1. SAFE TO AUTO-ARCHIVE (certain): completed=true AND completed_at older than 7 days. Set archived=true silently.',
+    '2. UNCERTAIN — ASK, do not archive: any incomplete todo (completed=false) older than 30 days with no reminder_at set. Do not touch these. Instead, collect them and send ONE WhatsApp message listing them and asking which (if any) can be dropped. Keep the message short — just the raw_message text of each item, numbered.',
+    '3. PROFILE CLEANUP: only remove profile.md entries marked (1x observed) that are older than 90 days. Never remove (2x observed), (verified), or undated entries. When unsure, leave it.',
+    '4. Write updated todos.csv and profile.md only for the changes you are certain about.',
+    'For the uncertain items message: outbox.json [{to:"' + MY_PHONE + '@s.whatsapp.net",text:"<message>"}].',
+    'Then run: git -C "' + __dirname.replace(/\\/g, '\\\\') + '" add todos.csv profile.md outbox.json && git -C "' + __dirname.replace(/\\/g, '\\\\') + '" commit -m "nightly cleanup" && git -C "' + __dirname.replace(/\\/g, '\\\\') + '" push'
+  ].join(' ')
+}
+
+function runCleanup() {
+  let claudeExe
+  try { claudeExe = findClaudeExe() }
+  catch (e) { console.error('[cleanup]', e.message); return }
+
+  const proc = spawn(claudeExe, ['--print', '--dangerously-skip-permissions', buildCleanupPrompt()], {
+    cwd: __dirname, detached: true, stdio: 'ignore', env: process.env
+  })
+  proc.unref()
+  console.log('[cleanup] Nightly maintenance run started')
+}
+
+async function checkCleanup() {
+  const now = new Date()
+  const londonHour = parseInt(now.toLocaleString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', hour12: false }))
+  if (londonHour !== 23) return // only at 11pm
+
+  const s = readState()
+  const today = now.toLocaleDateString('en-GB', { timeZone: 'Europe/London' })
+  if (s.last_cleanup_date === today) return // already ran today
+
+  s.last_cleanup_date = today
+  writeState(s)
+  runCleanup()
+}
+
 async function gitSync(msg = 'update') {
   try {
     await git.add('todos.csv')
@@ -277,16 +347,30 @@ async function handleMessage(msg, text) {
   const jid   = msg.key.remoteJid
   const state = readState()
 
-  // Immediate 👍 ack — track so we don't confuse it with a user reaction
-  botAcks.set(msg.key.id, Date.now())
-  sock.sendMessage(jid, { react: { text: '👍', key: msg.key } }).catch(() => {})
+  // Blue tick — bot has received the message
+  sock.readMessages([msg.key]).catch(() => {})
 
-  // Show typing while we process
+  // Ping / "are you on?" → 👍, done
+  if (PING_RE.test(text)) {
+    sock.sendMessage(jid, { react: { text: '👍', key: msg.key } }).catch(() => {})
+    console.log('[bot] Ping detected → 👍')
+    return
+  }
+
+  // Thanks → ❤️, done
+  if (THANKS_RE.test(text)) {
+    sock.sendMessage(jid, { react: { text: '❤️', key: msg.key } }).catch(() => {})
+    console.log('[bot] Thanks detected → ❤️')
+    return
+  }
+
+  // Show typing while we work on it
   showTyping(jid)
 
   // UPDATES command (from frontend edit system)
   if (text.startsWith('UPDATES\n') || text.startsWith('UPDATES\r\n')) {
     appendInbox({ type: 'updates', text, timestamp: new Date().toISOString() })
+    scheduleHourglass(msg, jid)
     runProcessor()
     return
   }
@@ -296,6 +380,7 @@ async function handleMessage(msg, text) {
     appendInbox({ type: 'reply', text, item_id: state.pending_question_item_id, timestamp: new Date().toISOString() })
     state.pending_question_item_id = null
     writeState(state)
+    scheduleHourglass(msg, jid)
     runProcessor()
     return
   }
@@ -320,6 +405,25 @@ async function handleMessage(msg, text) {
     }
   }
 
+  // Snooze request — pass to Claude with todo context
+  const snoozeMatch = text.match(SNOOZE_RE)
+  if (snoozeMatch) {
+    const lbm = state.last_bot_message
+    if (lbm?.todo_id) {
+      const durationHint = snoozeMatch[2]?.trim() || null
+      appendInbox({
+        type: 'snooze',
+        todo_id: lbm.todo_id,
+        duration_hint: durationHint,
+        timestamp: new Date().toISOString()
+      })
+      scheduleHourglass(msg, jid)
+      runProcessor()
+      return
+    }
+    // No context — fall through and treat as a new item
+  }
+
   // New to-do item
   const rows  = readCSV()
   const newId = String(nextId(rows))
@@ -341,6 +445,7 @@ async function handleMessage(msg, text) {
 
   console.log(`[bot] Stored #${newId}: "${text}"`)
   gitSync(`add: ${text.slice(0, 40)}`).catch(() => {})
+  scheduleHourglass(msg, jid)
   runProcessor()
 }
 
@@ -362,12 +467,29 @@ async function processOutbox() {
         try { keys = JSON.parse(fs.readFileSync(MSGKEYS_PATH, 'utf8')) } catch {}
         const msgKey = keys[msg.todo_id]
         if (msgKey) {
+          // Cancel pending hourglass for this message (🫡 will replace ⏳ if set)
+          const hEntry = pendingHourglass.get(msgKey.id)
+          if (hEntry) {
+            clearTimeout(hEntry.timer)
+            pendingHourglass.delete(msgKey.id)
+          }
           await sock.sendMessage(msgKey.remoteJid, { react: { text: msg.emoji || '🫡', key: msgKey } })
           console.log(`[bot] Reacted ${msg.emoji || '🫡'} to #${msg.todo_id}`)
         }
       } else {
         if (!msg.text?.trim()) { console.log('[outbox] Skipping blank message'); continue }
         const jid = msg.to || MY_JID
+
+        // Clear all pending hourglasses — text reply replaces them
+        for (const [id, hEntry] of pendingHourglass.entries()) {
+          clearTimeout(hEntry.timer)
+          if (hEntry.isSet) {
+            // Remove the ⏳ before we send the reply
+            sock.sendMessage(hEntry.jid, { react: { text: '', key: hEntry.msgKey } }).catch(() => {})
+          }
+          pendingHourglass.delete(id)
+        }
+
         await smartSend(jid, msg.text)
         clearTyping(jid)
         if (msg.pending_question_item_id) {
@@ -462,8 +584,9 @@ async function startBot() {
       // Voice note
       if (msg.message?.audioMessage?.ptt) {
         console.log('[voice] Received voice note, transcribing...')
-        botAcks.set(msg.key.id, Date.now())
-        sock.sendMessage(msg.key.remoteJid, { react: { text: '👍', key: msg.key } }).catch(() => {})
+        // Blue tick — received
+        sock.readMessages([msg.key]).catch(() => {})
+        // Show typing during transcription
         showTyping(msg.key.remoteJid)
         const s = readState(); s.last_was_voice = true; writeState(s)
         try {
@@ -474,6 +597,7 @@ async function startBot() {
           const transcription = await transcribeAudio(buf)
           if (!transcription) { console.log('[voice] Empty transcription'); continue }
           console.log(`[voice] Transcribed: "${transcription}"`)
+          // handleMessage will re-set typing + schedule hourglass
           handleMessage(msg, transcription).catch(e => console.error('[handler]', e.message))
         } catch (e) {
           console.error('[voice] Transcription error:', e.message)
@@ -489,16 +613,12 @@ async function startBot() {
     }
   })
 
-  // ── 👍 reaction = mark task done ──
+  // ── 👍 reaction on a bot reminder = mark task done ──
   sock.ev.on('messages.reaction', async (updates) => {
     for (const update of updates) {
       if (update.reaction?.text !== '👍') continue
       const reactedKey = update.key
       if (!reactedKey?.id) continue
-
-      // Skip the bot's own ack reactions (sent within last 5s)
-      const ackTime = botAcks.get(reactedKey.id)
-      if (ackTime && Date.now() - ackTime < 5000) continue
 
       let keys = {}
       try { keys = JSON.parse(fs.readFileSync(MSGKEYS_PATH, 'utf8')) } catch {}
@@ -536,5 +656,6 @@ async function startBot() {
 // Safety-net polling (file watcher is primary, this catches edge cases)
 setInterval(() => processOutbox().catch(console.error), 5000)
 setInterval(() => checkScheduled().catch(console.error), 30000)
+setInterval(() => checkCleanup().catch(console.error), 60000) // nightly at 11pm
 
 startBot().catch(console.error)
