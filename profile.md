@@ -109,6 +109,18 @@ He had no previous task management system — just working memory. The purpose o
 
 ---
 
+## Proactive Flags Sent
+
+- [2026-03-30] Branch agenda not completed — flagged 40 mins before Monday meeting
+
+---
+
+## Known System Limitations
+
+- [2026-03-30] gcal_* MCP tools not available in current environment — calendar events cannot be added automatically. Deep has had to ask 4+ times. Surface this to user/developer.
+
+---
+
 ## Verified Preferences (explicit or 3+ confirmed)
 
 - [2026-03-30] Voice notes often contain multiple items — always split into individual todos
