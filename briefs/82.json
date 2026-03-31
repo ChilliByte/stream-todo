@@ -1,0 +1,11 @@
+{
+  "title": "Nocturnal heart palpitations — causes and next steps",
+  "summary": "Likely sleep apnea or SVT — book a GP this week for an ECG. Not an emergency unless you get chest pain or feel faint.",
+  "body": "What you described — heart racing during sleep, possibly ~120 bpm — is worth taking seriously but almost certainly not dangerous.\n\nMost likely causes:\n\n1. Sleep apnea — oxygen drops during apneas trigger an adrenaline spike → heart races. Classic pattern. More likely if you snore, wake gasping, or feel unrested in the mornings. Heart rate 'over 2Hz' fits this perfectly.\n\n2. SVT (supraventricular tachycardia) — sudden fast heart rate, often benign, self-resolving. Very common. Usually starts and stops abruptly.\n\n3. Nocturnal anxiety or stress response — can cause the same symptoms.\n\n4. Caffeine / alcohol late in the day — lowers the threshold for both.\n\nLess likely but worth ruling out: atrial fibrillation (AF) — more common 40+, irregular rather than fast-but-regular.\n\nWhat to do:\n- Book a GP appointment this week — ask for an ECG. Non-urgent but don't leave it months.\n- If it happens again: count beats for 15s × 4 to get bpm; note if it stopped suddenly (SVT) or tapered off (more likely apnea/anxiety).\n- Short term: cut caffeine after 2pm, no alcohol close to bed, try sleeping on your side.\n\nIf you get chest pain, shortness of breath, or feel faint during an episode — A&E, don't wait.",
+  "links": [
+    { "label": "NHS — Heart palpitations", "url": "https://www.nhs.uk/conditions/heart-palpitations/" },
+    { "label": "NHS — Sleep apnea", "url": "https://www.nhs.uk/conditions/sleep-apnoea/" },
+    { "label": "NHS — SVT", "url": "https://www.nhs.uk/conditions/supraventricular-tachycardia/" }
+  ],
+  "created_at": "2026-03-31T12:35:35.727Z"
+}
