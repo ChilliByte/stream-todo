@@ -112,6 +112,7 @@ He had no previous task management system — just working memory. The purpose o
 ## Proactive Flags Sent
 
 - [2026-03-30] Branch agenda not completed — flagged 40 mins before Monday meeting
+- [2026-04-01] GP appointment follow-up — flagged at 4:46pm, surgery closing window
 
 ---
 
