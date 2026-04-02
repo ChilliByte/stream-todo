@@ -1,5 +1,5 @@
 "id","timestamp","raw_message","category","priority","new","reminder_at","completed","completed_at","archived","brief_file"
-"1","2026-03-29T09:00:00","Get milk","errands","high","false","2026-03-29T17:20:00","true","2026-03-29T17:35:00","true",""
+"1","2026-03-29T09:00:00","Get milk","errands","normal","false","2026-03-29T17:20:00","false","","true",""
 "2","2026-03-29T10:30:00","Read chapter 3 of Das Kapital","books","medium","false","","false","","true",""
 "3","2026-03-29T11:00:00","Follow up with Arjun on Mumbai chapter","india-rci","high","false","2026-03-29T14:00:00","false","","true",""
 "4","2026-03-29T14:00:00","Write short story idea about the lighthouse","creative","low","false","","false","","true",""
