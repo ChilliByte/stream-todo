@@ -87,6 +87,7 @@ He had no previous task management system — just working memory. The purpose o
 - Walk suggestion welcome if it's light outside and he hasn't moved
 - Google Fit integration is a future goal — may expose GPS data
 - GPS location format: WhatsApp "send location" (shared directly in chat). Google Fit may also have GPS data. Use this format for any location-aware features.
+- **Home GPS**: lat 51.568494, lng -0.0362604 (stored 2026-04-03, from Google Fit/world_state). Use for commute, geofencing, and location-aware reminders.
 - Don't nag about jujutsu — he'll raise it when it's relevant
 
 ---
