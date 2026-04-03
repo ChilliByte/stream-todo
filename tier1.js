@@ -15,13 +15,13 @@ import path from 'path'
 import { fileURLToPath } from 'url'
 import { parse } from 'csv-parse/sync'
 import { markLastInterventionResponded, detectFeedback, recordFeedback } from './adaptive.js'
-import { getAccessToken } from './claude_token.js'
+import { getTokenInfo } from './claude_token.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 async function getClient(forceRefresh = false) {
-  const token = await getAccessToken(forceRefresh)
-  return new Anthropic({ apiKey: token })
+  const { token, isOAuth } = await getTokenInfo(forceRefresh)
+  return isOAuth ? new Anthropic({ authToken: token }) : new Anthropic({ apiKey: token })
 }
 
 // ── Helpers ───────────────────────────────────────────────────
