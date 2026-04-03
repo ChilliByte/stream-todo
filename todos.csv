@@ -158,4 +158,5 @@ Log in profile MD to avoid repeating the same instruction to me sequentially, su
 "153","2026-04-03T23:00:00.000Z","Update tier 1 to skip or ask before adding conversational/question messages as todos","misc","medium","false","","true","2026-04-03T22:47:22.000Z","true",""
 "154","2026-04-03T22:24:54.010Z","Add to tier 1 prompt to not let this stuff through, and to ask when it's not 100% certain that something can be just replied to. Also, for very simple questions (what's the weather like? Etc) tier 1 should reply","misc","high","false","","true","2026-04-03T22:24:54.197Z","true",""
 "155","2026-04-03T22:47:21.762Z",".","misc","low","false","","true","2026-04-03T22:47:22.000Z","true",""
-"156","2026-04-03T22:47:29.760Z","Give the todos another clear out. Front end shows a load of blank ones","misc","medium","false","","true","2026-04-03T22:47:22.000Z","false",""
+"156","2026-04-03T22:47:29.760Z","Give the todos another clear out. Front end shows a load of blank ones","misc","medium","false","","true","2026-04-03T22:47:22.000Z","true",""
+"157","2026-04-03T22:54:35.631Z","Blank entries still there","misc","low","false","","true","2026-04-03T22:54:00.000Z","true",""
