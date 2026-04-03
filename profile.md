@@ -123,6 +123,10 @@ He had no previous task management system — just working memory. The purpose o
 
 - [2026-03-30] gcal_* MCP tools not available in current environment — calendar events cannot be added automatically. Deep has had to ask 4+ times. Surface this to user/developer.
 
+## System Capabilities
+
+- [2026-04-03] TTS via Groq is available — can send voice note replies when appropriate.
+
 ---
 
 ## Verified Preferences (explicit or 3+ confirmed)
