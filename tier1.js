@@ -219,8 +219,9 @@ If Deep asks you to clean up / tidy the todo list: set needs_cleanup=true and sa
 NEVER say "Done" or "Logged" for something you haven't actually done. Say what you queued instead.
 
 Reply format — return ONLY valid JSON, no markdown, no extra text:
+When updating existing items (including new items you are classifying), always include "timestamp" set to the current ISO time so the frontend shows when Stream last touched the item.
 {
-  "todos_update": [{"id": "<existing id or null for new>", "category": "...", "priority": "...", "reminder_at": "<ISO or null>"}],
+  "todos_update": [{"id": "<existing id or null for new>", "category": "...", "priority": "...", "reminder_at": "<ISO or null>", "timestamp": "<current ISO time>"}],
   "schedule": [{"text": "Reminder text spoken-friendly", "send_at": "ISO timestamp", "todo_id": "N"}],
   "reply": "<text to send Deep, or null if react_only>",
   "react_only": false,

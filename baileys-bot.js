@@ -37,9 +37,21 @@ import {
   sendVoice, smartSend,
   storeLastBotMessage, appendHistory
 } from './audio.js'
-import { startLocalServer } from './server.js'
+import { startLocalServer, setCurrentQR, clearCurrentQR } from './server.js'
 
 dotenv.config()
+
+// Suppress hardcoded console spam from libsignal (Bad MAC, session errors on reconnect)
+{
+  const SUPPRESS = [/Session error:/, /Bad MAC/, /Failed to decrypt message/, /Closing open session/, /Closing session:/]
+  const filter = (orig) => (...args) => {
+    if (SUPPRESS.some(r => r.test(String(args[0] || '')))) return
+    orig(...args)
+  }
+  console.error = filter(console.error.bind(console))
+  console.warn  = filter(console.warn.bind(console))
+  console.info  = filter(console.info.bind(console))
+}
 
 const __dirname      = path.dirname(fileURLToPath(import.meta.url))
 const MSGKEYS_PATH   = path.join(__dirname, 'message_keys.json')
@@ -49,14 +61,14 @@ const BRIEFS_DIR      = path.join(__dirname, 'briefs')
 const WORLD_STATE_PATH = path.join(__dirname, 'world_state.json')
 const DIGEST_PATH      = path.join(__dirname, 'daily_digest.json')
 
-const MY_PHONE = process.env.MY_PHONE
-if (!MY_PHONE) { console.error('MY_PHONE not set in .env'); process.exit(1) }
-const MY_JID = `${MY_PHONE}@s.whatsapp.net`
+const DEEP_PHONE = process.env.DEEP_PHONE
+if (!DEEP_PHONE) { console.error('DEEP_PHONE not set in .env'); process.exit(1) }
+const DEEP_JID = `${DEEP_PHONE}@s.whatsapp.net`
 
-// All JIDs allowed to interact with the bot (bot number + personal number)
+// JIDs allowed to send messages to the bot (Deep's number/s)
 const WHITELISTED_JIDS = new Set([
   // Standard @s.whatsapp.net JID
-  `${MY_PHONE}@s.whatsapp.net`,
+  `${DEEP_PHONE}@s.whatsapp.net`,
   ...(process.env.MY_PERSONAL_PHONE ? [`${process.env.MY_PERSONAL_PHONE}@s.whatsapp.net`] : []),
   // WhatsApp @lid (Linked ID) format — newer devices send messages via @lid instead of @s.whatsapp.net
   // MY_LID is auto-detected from auth_info/creds.json on first run, or set manually in .env
@@ -74,6 +86,14 @@ let sock = null
 let _wsConnected = false  // true only when WhatsApp connection is 'open'
 let _reconnecting = false // guard against multiple concurrent startBot calls
 let _socketGen = 0        // incremented each startBot; stale event handlers self-ignore
+let _reconnectAttempts = 0 // for exponential backoff
+
+// Small LRU cache so Baileys getMessage() can retry failed decryptions
+const _msgCache = new Map()
+function cacheMsg(key, msg) {
+  _msgCache.set(key.id, msg)
+  if (_msgCache.size > 200) _msgCache.delete(_msgCache.keys().next().value)
+}
 
 // Ping / thanks patterns — handled immediately without Claude
 const PING_RE   = /^(hey|hello|hi|test|are you (there|on|alive|up)|ping|you there|u there)[\s?!.]*$/i
@@ -134,7 +154,7 @@ function clearTyping(jid) {
   clearInterval(_typingInterval)
   _typingInterval = null
   _typingJid = null
-  sock?.sendPresenceUpdate('paused', jid || MY_JID).catch(() => {})
+  sock?.sendPresenceUpdate('paused', jid || DEEP_JID).catch(() => {})
 }
 
 // ── Hourglass reaction (fires 5s after runProcessor, only if still pending) ──
@@ -355,7 +375,7 @@ function buildProcessorPrompt() {
     'If inbox contains "done"/"sorted" and context shows a recent todo, mark it complete in todos.csv.',
     'IMPORTANT: Never write empty or null text to outbox.json.',
     'For silently processed items: outbox.json [{type:"react",emoji:"🫡",todo_id:"<id>"}].',
-    'For messages to Deep: outbox.json [{to:"' + MY_PHONE + '@s.whatsapp.net",text:"<short spoken-friendly message>",pending_question_item_id:"<id or null>"}].',
+    'For messages to Deep: outbox.json [{to:"' + DEEP_PHONE + '@s.whatsapp.net",text:"<short spoken-friendly message>",pending_question_item_id:"<id or null>"}].',
     'Scheduled reminders: scheduled.json [{text:"<spoken-friendly reminder>",send_at:"<ISO>",todo_id:"<id>"}] — always include todo_id.',
     proactiveLine,
     'After processing, write todos.csv and profile.md.',
@@ -405,6 +425,7 @@ async function runTier1Processor(newItemId, msg, jid) {
           if (upd.category)    { row.category    = upd.category;    changed = true }
           if (upd.priority)    { row.priority    = upd.priority;    changed = true }
           if (upd.reminder_at !== undefined) { row.reminder_at = upd.reminder_at || ''; changed = true }
+          if (upd.timestamp)   { row.timestamp   = upd.timestamp;   changed = true }
           row.new = 'false'
           changed = true
         }
@@ -453,8 +474,8 @@ async function runTier1Processor(newItemId, msg, jid) {
         }
         pendingHourglass.delete(id)
       }
-      await _smartSend(jid || MY_JID, result.reply)
-      clearTyping(jid || MY_JID)
+      await _smartSend(jid || DEEP_JID, result.reply)
+      clearTyping(jid || DEEP_JID)
       storeLastBotMessage(result.reply, newItemId)
     }
 
@@ -508,7 +529,7 @@ async function runTier1Processor(newItemId, msg, jid) {
       const leftover = readCSV().filter(r => r.new === 'true')
       if (leftover.length > 0) {
         console.log(`[tier1] ${leftover.length} item(s) arrived during run — processing now`)
-        runTier1Processor(null, null, MY_JID).catch(e => console.error('[tier1]', e.message))
+        runTier1Processor(null, null, DEEP_JID).catch(e => console.error('[tier1]', e.message))
       }
     }
   }
@@ -551,6 +572,12 @@ function runProcessor(extraPrompt = '') {
     log.end()
     console.log(`[bot] Processor exited (code ${code})`)
     processOutbox().catch(console.error)
+    // Pick up any new items that arrived while processor was busy (were skipped by runProcessor guard)
+    const pending = readCSV().filter(r => r.new === 'true')
+    if (pending.length > 0) {
+      console.log(`[bot] ${pending.length} item(s) queued during processor run — processing now`)
+      runTier1Processor(null, null, DEEP_JID).catch(e => console.error('[tier1]', e.message))
+    }
   })
 
   console.log('[bot] Processor invoked (pid ' + proc.pid + ')')
@@ -573,7 +600,7 @@ function buildCleanupPrompt() {
     '2. UNCERTAIN — ASK, do not archive: any incomplete todo (completed=false) older than 30 days with no reminder_at set. Do not touch these. Instead, collect them and send ONE WhatsApp message listing them and asking which (if any) can be dropped. Keep the message short — just the raw_message text of each item, numbered.',
     '3. PROFILE CLEANUP: only remove profile.md entries marked (1x observed) that are older than 90 days. Never remove (2x observed), (verified), or undated entries. When unsure, leave it.',
     '4. Write updated todos.csv and profile.md only for the changes you are certain about.',
-    'For the uncertain items message: outbox.json [{to:"' + MY_PHONE + '@s.whatsapp.net",text:"<message>"}].',
+    'For the uncertain items message: outbox.json [{to:"' + DEEP_PHONE + '@s.whatsapp.net",text:"<message>"}].',
     'Then run: git -C "' + __dirname.replace(/\\/g, '\\\\') + '" add todos.csv profile.md outbox.json && git -C "' + __dirname.replace(/\\/g, '\\\\') + '" commit -m "nightly cleanup" && git -C "' + __dirname.replace(/\\/g, '\\\\') + '" push'
   ].join(' ')
 }
@@ -628,7 +655,7 @@ async function recoverMissedReminders() {
     const ageMs = now - sendAt
     if (sendAt <= now && ageMs <= 30 * 60 * 1000) {
       try {
-        await _smartSend(MY_JID, `(Missed) ${entry.text}`)
+        await _smartSend(DEEP_JID, `(Missed) ${entry.text}`)
         if (entry.todo_id) storeLastBotMessage(entry.text, entry.todo_id)
         recovered++
       } catch (e) {
@@ -806,7 +833,7 @@ async function handleMessage(msg, text) {
 let outboxRunning = false
 
 async function processOutbox() {
-  if (!sock || outboxRunning) return
+  if (!sock || !_wsConnected || outboxRunning) return
   const messages = readOutbox()
   if (!messages.length) return
   outboxRunning = true
@@ -821,11 +848,11 @@ async function processOutbox() {
           const event   = await gcalCreateEvent({ title: msg.title, start: msg.start, end: endTime, description: msg.description || '', colorId: msg.colorId })
           const day     = new Date(msg.start).toLocaleDateString('en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short' })
           const time    = new Date(msg.start).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' })
-          await _smartSend(MY_JID, `📅 Added to calendar — ${msg.title}, ${day} at ${time}`)
+          await _smartSend(DEEP_JID, `📅 Added to calendar — ${msg.title}, ${day} at ${time}`)
           console.log(`[gcal] Event created: ${msg.title}`)
         } catch (e) {
           console.error('[gcal] Failed to create event:', e.message)
-          await _smartSend(MY_JID, `Couldn't add to calendar — ${e.message.includes('token') ? 'run: node gcal.js setup' : e.message}`)
+          await _smartSend(DEEP_JID, `Couldn't add to calendar — ${e.message.includes('token') ? 'run: node gcal.js setup' : e.message}`)
         }
       } else if (msg.type === 'react') {
         let keys = {}
@@ -843,7 +870,7 @@ async function processOutbox() {
         }
       } else {
         if (!msg.text?.trim()) { console.log('[outbox] Skipping blank message'); continue }
-        const jid = msg.to || MY_JID
+        const jid = msg.to || DEEP_JID
 
         // Clear all pending hourglasses — text reply replaces them
         for (const [id, hEntry] of pendingHourglass.entries()) {
@@ -893,7 +920,7 @@ async function checkScheduled() {
     if (sendAt <= now && sendAt > new Date(now - 15 * 60 * 1000)) {
       if (!sock || !_wsConnected) { remaining.push(entry); continue }  // re-guard (race condition)
       try {
-        await _smartSend(MY_JID, entry.text)
+        await _smartSend(DEEP_JID, entry.text)
         if (entry.todo_id) storeLastBotMessage(entry.text, entry.todo_id)
         changed = true
       } catch (e) {
@@ -931,20 +958,24 @@ async function startBot() {
     version, auth: state,
     logger: pino({ level: 'silent' }),
     browser: Browsers.macOS('Desktop'),
-    getMessage: async () => ({ conversation: '' }),
+    getMessage: async (key) => _msgCache.get(key.id) || { conversation: '' },
     syncFullHistory: false,
     markOnlineOnConnect: false,
+    keepAliveIntervalMs: 10_000,
   })
 
   sock.ev.on('creds.update', saveCreds)
 
   sock.ev.on('connection.update', ({ connection, lastDisconnect, qr }) => {
     if (_socketGen !== myGen) return  // stale socket — ignore all its events
-    if (qr) { console.log('\n[bot] Scan QR:\n'); qrcode.generate(qr, { small: true }) }
+    if (qr) { console.log('\n[bot] Scan QR:\n'); qrcode.generate(qr, { small: true }); setCurrentQR(qr) }
     if (connection === 'open') {
       _wsConnected = true
+      _reconnectAttempts = 0  // reset backoff on successful connect
+      clearCurrentQR()        // QR no longer needed once connected
       console.log('[bot] Connected ✓')
       // Delay recovery slightly so we know this isn't a transient connection
+      processOutbox().catch(console.error)
       setTimeout(() => {
         if (_wsConnected && _socketGen === myGen) recoverMissedReminders().catch(console.error)
       }, 3000)
@@ -957,16 +988,19 @@ async function startBot() {
       if (code === DisconnectReason.loggedOut) {
         console.log('[bot] Logged out — delete auth_info/ and restart')
       } else if (code === DisconnectReason.connectionReplaced) {
-        // Another session took over — wait longer before reconnecting
+        // Phone took over — wait 45s for it to go idle before reconnecting
         if (!_reconnecting) {
           _reconnecting = true
-          console.log('[bot] Session replaced by another client — reconnecting in 15s...')
-          setTimeout(startBot, 15000)
+          console.log('[bot] Session replaced by another client — reconnecting in 45s...')
+          setTimeout(startBot, 45000)
         }
       } else if (!_reconnecting) {
         _reconnecting = true
-        console.log('[bot] Disconnected, reconnecting in 5s...')
-        setTimeout(startBot, 5000)
+        // Exponential backoff: 5s, 10s, 20s, 40s, 60s max
+        _reconnectAttempts++
+        const delay = Math.min(5000 * Math.pow(2, _reconnectAttempts - 1), 60000)
+        console.log(`[bot] Disconnected (attempt ${_reconnectAttempts}), reconnecting in ${delay/1000}s...`)
+        setTimeout(startBot, delay)
       } else {
         console.log('[bot] Reconnect already scheduled, skipping duplicate')
       }
@@ -1002,9 +1036,27 @@ async function startBot() {
       }
       if (seenMsgIds.has(msg.key.id)) continue
       markSeen(msg.key.id)
+      if (msg.message) cacheMsg(msg.key, msg.message)  // for getMessage() retry on Bad MAC
 
-      // Voice note
-      if (msg.message?.audioMessage?.ptt) {
+      // Live location / static location — update GPS in world_state
+      const loc = msg.message?.liveLocationMessage || msg.message?.locationMessage
+      if (loc?.degreesLatitude) {
+        const ws = readJSON(WORLD_STATE_PATH, {})
+        ws.gps = {
+          lat: loc.degreesLatitude,
+          lng: loc.degreesLongitude,
+          accuracy_m: loc.accuracyInMeters || null,
+          updated_at: new Date().toISOString(),
+          is_live: !!msg.message?.liveLocationMessage
+        }
+        fs.writeFileSync(WORLD_STATE_PATH, JSON.stringify(ws, null, 2))
+        console.log(`[location] GPS updated: ${loc.degreesLatitude.toFixed(4)}, ${loc.degreesLongitude.toFixed(4)}`)
+        sock.readMessages([msg.key]).catch(() => {})
+        continue  // don't process as a text command
+      }
+
+      // Voice note — ptt=true for recorded in-chat, ptt=false for forwarded voice notes
+      if (msg.message?.audioMessage) {
         console.log('[voice] Received voice note, transcribing...')
         // Blue tick — received
         sock.readMessages([msg.key]).catch(() => {})
@@ -1059,7 +1111,7 @@ async function startBot() {
       writeCSV(rows)
       gitSync(`complete: ${row.raw_message.slice(0, 40)}`).catch(() => {})
       console.log(`[bot] 👍 reaction → completed #${todoId}: "${row.raw_message}"`)
-      sock.sendMessage(reactedKey.remoteJid || MY_JID, {
+      sock.sendMessage(reactedKey.remoteJid || DEEP_JID, {
         react: { text: '✅', key: reactedKey }
       }).catch(() => {})
     }
@@ -1127,11 +1179,21 @@ cron.schedule('0 */6 * * *', () => {
   refreshTokenViaClaude().catch(e => console.error('[token] Keepalive cron error:', e.message))
 })
 
+// ── WhatsApp session keepalive ────────────────────────────────
+// Sends a presence update every 4 minutes so WA servers treat the session
+// as active and don't close it during idle periods.
+// This is a WA-level heartbeat, separate from Baileys' TCP-level keepAliveIntervalMs.
+setInterval(() => {
+  if (sock && _wsConnected) {
+    sock.sendPresenceUpdate('available', DEEP_JID).catch(() => {})
+  }
+}, 4 * 60 * 1000)
+
 // ── Tier 2: proactive heartbeat — every 20 minutes ────────────
 cron.schedule('*/20 * * * *', () => {
   runTier2(async (text) => {
     if (!sock) return
-    await _smartSend(MY_JID, text)
+    await _smartSend(DEEP_JID, text)
     storeLastBotMessage(text, null)
   }).catch(e => console.error('[tier2]', e.message))
 })
@@ -1140,7 +1202,7 @@ cron.schedule('*/20 * * * *', () => {
 cron.schedule('30 7 * * *', () => {
   generateDailyDigest(async (text) => {
     if (!sock) return
-    await _smartSend(MY_JID, text)
+    await _smartSend(DEEP_JID, text)
     storeLastBotMessage(text, null)
   }).catch(e => console.error('[digest]', e.message))
 }, { timezone: 'Europe/London' })

@@ -1090,7 +1090,7 @@ function buildItem(item) {
     <div class="item-body">
       <div class="item-text${isDone ? ' done' : ''}">${esc(item.raw_message)}</div>
       <div class="item-meta">
-        <span class="item-time">${fmtAge(item.timestamp)}</span>
+        <span class="item-time">${fmtFull(item.timestamp)}</span>
         ${priority ? `<span class="badge ${priority}">${priority}</span>` : ''}
         ${isUpcoming ? `<span class="reminder-tag">⏰ ${fmtFull(reminder)}</span>` : ''}
         ${hasBrief ? `<button class="brief-badge" data-id="${item.id}" data-file="${esc(item.brief_file)}">📋 Brief</button>` : ''}
