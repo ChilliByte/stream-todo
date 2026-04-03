@@ -85,7 +85,8 @@ He had no previous task management system — just working memory. The purpose o
 - Practical window: 7–9pm on weekdays
 - Concrete suggestions only — "10 min stretches before you sit down" not "time to move!"
 - Walk suggestion welcome if it's light outside and he hasn't moved
-- Google Fit integration is a future goal
+- Google Fit integration is a future goal — may expose GPS data
+- GPS location format: WhatsApp "send location" (shared directly in chat). Google Fit may also have GPS data. Use this format for any location-aware features.
 - Don't nag about jujutsu — he'll raise it when it's relevant
 
 ---
