@@ -1,0 +1,10 @@
+{
+  "title": "Groq TTS Support",
+  "summary": "Yes — Groq supports TTS via Canopy Labs' Orpheus model on GroqCloud, with an OpenAI-compatible endpoint.",
+  "body": "Yes. Groq offers TTS via GroqCloud using Canopy Labs' Orpheus model (launched Jan 2026).\n\nEndpoint: https://api.groq.com/openai/v1/audio/speech\nDrop-in OpenAI-compatible — just swap base URL and model name.\n\nModels:\n- canopylabs/orpheus-v1-english — expressive, vocal direction controls. Voices: troy, hannah, austin (others available). ~$22/1M chars.\n- canopylabs/orpheus-arabic-saudi — Saudi dialect. ~$40/1M chars.\n\nOutput: WAV default, 48kHz. Ultra-low latency (~100 chars/sec throughput).\n\nDocs: https://console.groq.com/docs/text-to-speech",
+  "links": [
+    { "label": "Groq TTS Docs", "url": "https://console.groq.com/docs/text-to-speech" },
+    { "label": "Orpheus TTS announcement", "url": "https://groq.com/blog/canopy-labs-orpheus-tts-is-live-on-groqcloud" }
+  ],
+  "created_at": "2026-04-03T13:40:43.700Z"
+}
