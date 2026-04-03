@@ -150,4 +150,4 @@ Log in profile MD to avoid repeating the same instruction to me sequentially, su
 "145","2026-04-03T14:58:46.448Z","Then tell me how long the drive to work is right now","misc","low","false","","false","","false",""
 "146","2026-04-03T15:36:36.937Z","Update .env with work address","misc","low","false","","false","","false",""
 "147","2026-04-03T17:03:51.458Z","How's it going","misc","low","false","","false","","false",""
-"148","2026-04-03T18:47:09.975Z","Can Stream handle calls?","misc","low","false","","false","","false",""
+"148","2026-04-03T18:47:09.975Z","Can Stream handle calls?","misc","low","false","","true","2026-04-03T18:52:48.000Z","false",""
