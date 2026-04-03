@@ -54,6 +54,8 @@ He had no previous task management system — just working memory. The purpose o
 | Friday 1pm | Jatin call | Always confirm; prompt prep Friday morning |
 | Monday 7pm | Branch meeting | Block — nothing else scheduled |
 
+**Note (week of 2026-04-03):** Jatin call moved to Sunday 5 Apr 1pm. Reading chapters 24-26 of HRR Vol 2 (Trotsky) — reminder set Saturday 10am.
+
 ---
 
 ## Work — Wellred Books
