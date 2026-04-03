@@ -818,7 +818,7 @@ async function processOutbox() {
       if (msg.type === 'calendar') {
         try {
           const endTime = msg.end || new Date(new Date(msg.start).getTime() + 60 * 60 * 1000).toISOString()
-          const event   = await gcalCreateEvent({ title: msg.title, start: msg.start, end: endTime, description: msg.description || '' })
+          const event   = await gcalCreateEvent({ title: msg.title, start: msg.start, end: endTime, description: msg.description || '', colorId: msg.colorId })
           const day     = new Date(msg.start).toLocaleDateString('en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short' })
           const time    = new Date(msg.start).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' })
           await _smartSend(MY_JID, `📅 Added to calendar — ${msg.title}, ${day} at ${time}`)
