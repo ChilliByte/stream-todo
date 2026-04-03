@@ -136,3 +136,6 @@ He had no previous task management system — just working memory. The purpose o
 - Individual reminders or grouped digest when several things are due at once?
 - Friday evening or Saturday morning for weekend errand prompts?
 - Jujutsu — watch for him to raise it
+
+## Adaptive Notes
+- [03/04/2026] ✗ negative (re: "Got it—sounds like the system's picking up noise. We'll clea") — "No, don't do that. You do what I say. Note that in profile.md and then go clean " (1x observed)
