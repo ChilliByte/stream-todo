@@ -156,3 +156,4 @@ Log in profile MD to avoid repeating the same instruction to me sequentially, su
 "151","2026-04-03T19:31:26.165Z","Update tier 3 cleanup to archive conversational items; update tier 1 to skip/confirm conversational messages; clean todos.csv","misc","high","false","","true","2026-04-03T23:00:00.000Z","false",""
 "152","2026-04-03T19:55:17.202Z","Did that work","misc","low","false","","true","2026-04-03T23:00:00.000Z","true",""
 "153","2026-04-03T23:00:00.000Z","Update tier 1 to skip or ask before adding conversational/question messages as todos","misc","medium","false","","false","","false",""
+"154","2026-04-03T22:24:54.010Z","Add to tier 1 prompt to not let this stuff through, and to ask when it's not 100% certain that something can be just replied to. Also, for very simple questions (what's the weather like? Etc) tier 1 should reply","misc","high","false","","true","2026-04-03T22:24:54.197Z","false",""

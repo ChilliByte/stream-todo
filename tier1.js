@@ -51,8 +51,23 @@ function inferPeriod(now) {
   return 'evening'
 }
 
-function inferLocation(period, overrides) {
+function inferLocation(period, overrides, gps) {
   if (overrides?.location_override) return overrides.location_override
+  // GPS-based inference if fresh (< 15 min old)
+  if (gps?.lat && gps?.updated_at) {
+    const ageMins = (Date.now() - new Date(gps.updated_at).getTime()) / 60000
+    if (ageMins < 15) {
+      const homeLat  = parseFloat(process.env.HOME_LAT || '0')
+      const homeLng  = parseFloat(process.env.HOME_LNG || '0')
+      const workLat  = parseFloat(process.env.WORK_LAT || '0')
+      const workLng  = parseFloat(process.env.WORK_LNG || '0')
+      const distHome = Math.hypot(gps.lat - homeLat, gps.lng - homeLng)
+      const distWork = Math.hypot(gps.lat - workLat, gps.lng - workLng)
+      if (distHome < 0.005) return 'home'       // ~400m radius
+      if (distWork < 0.005) return 'Wellred Books'
+      return 'in transit'
+    }
+  }
   if (period === 'work_hours') return 'Wellred Books'
   if (period === 'morning_commute') return 'commuting'
   if (period === 'drive_home') return 'driving home'
@@ -69,7 +84,7 @@ function buildContext(newItems, inbox) {
   const scheduled  = readJSON(path.join(__dirname, 'scheduled.json'), [])
 
   const period   = inferPeriod(now)
-  const location = inferLocation(period, worldState.overrides)
+  const location = inferLocation(period, worldState.overrides, worldState.gps)
 
   const timeStr = now.toLocaleString('en-GB', {
     timeZone: 'Europe/London',
@@ -134,6 +149,10 @@ function buildContext(newItems, inbox) {
       ].filter(Boolean).join('\n')
     : null
 
+  // Commute summary — only include if relevant and fresh
+  const commute = worldState.commute
+  const commuteSummary = commute?.summary && commute.relevant_window ? commute.summary : null
+
   return {
     timeStr,
     now: now.toISOString(),
@@ -146,6 +165,7 @@ function buildContext(newItems, inbox) {
     lastBotCtx,
     overrideSummary,
     digestSummary,
+    commuteSummary,
     newItems,
     inbox
   }
@@ -185,6 +205,12 @@ Whenever reminder_at is set on any item in todos_update, you MUST populate sched
 RESEARCH: When needs_research is true, always set reply to a brief acknowledgement like "On it — I'll look into that and come back to you." Never go react_only on a research item.
 
 ANTI-NAG: Check the conversation thread before replying. If you've already said something about a topic in the last few messages, do NOT repeat it. If Deep has already acknowledged something, do not bring it up again.
+
+CONVERSATIONAL ITEMS: Not every message is a todo. Apply these rules strictly:
+- Greetings, test messages, acknowledgements ("thanks", "got it", "ok"), and confirmations ("did that work", "testing", "hello") are NOT todos. Set the item to completed=true, archived=true in todos_update. Use react_only=true if no further reply is needed, otherwise reply briefly.
+- If a message is ambiguous — you're not sure if it's a command to log something or just conversation — ask: "Want me to log that?" Don't assume it's a todo.
+- Simple factual questions (weather, time, "what's on today") should be answered directly from context if possible. If research is needed (e.g. live weather), flag needs_research=true and set the todo to completed=true so it doesn't sit open. Never leave a question as an active todo.
+- The test is: would Deep expect to see this item in his active list tomorrow? If no, mark it done+archived now.
 
 HONESTY: You can write todos, schedule reminders, patch world state, and send a reply.
 You CANNOT write profile.md directly or clean up the todo list — those need the background processor (Tier 3).
@@ -239,7 +265,7 @@ ${ctx.overrideSummary || 'none'}
 
 Today's digest:
 ${ctx.digestSummary || 'not generated yet — will appear after 7:30am'}
-
+${ctx.commuteSummary ? `\nCommute: ${ctx.commuteSummary}` : ''}
 Active concerns:
 ${ctx.concerns.length ? ctx.concerns.join('\n') : 'none'}
 
