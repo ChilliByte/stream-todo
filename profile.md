@@ -119,13 +119,13 @@ He had no previous task management system — just working memory. The purpose o
 
 ---
 
-## Known System Limitations
-
-- [2026-03-30] gcal_* MCP tools not available in current environment — calendar events cannot be added automatically. Deep has had to ask 4+ times. Surface this to user/developer.
-
 ## System Capabilities
 
 - [2026-04-03] TTS via Groq is available — can send voice note replies when appropriate.
+- [2026-04-03] Calendar integration confirmed working — events can be added (verified: Jatin call Sunday 5 Apr).
+- [2026-04-03] Google Fit integration reportedly available — location and step data. Not yet fully verified in production; test on next use.
+- [2026-04-03] Weather available via web search.
+- [2026-04-03] STT confirmed working — voice notes are transcribed reliably.
 
 ---
 
