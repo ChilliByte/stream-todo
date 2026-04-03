@@ -1,0 +1,10 @@
+{
+  "title": "London weather — Saturday 4 April",
+  "summary": "15°C, morning drizzle clearing by 1pm, bright and breezy afternoon.",
+  "body": "Saturday 4 April: High of 15°C. Drizzle through the early morning, but rain likelihood drops below 5% by around 1pm. Bright and breezy for the rest of the day. Some rain expected overnight Saturday into Sunday.",
+  "links": [
+    { "label": "Timeout London Easter forecast", "url": "https://www.timeout.com/london/news/easter-bank-holiday-2026-the-full-updated-london-weather-forecast-for-april-3-6-met-office-040226" },
+    { "label": "Met Office London", "url": "https://weather.metoffice.gov.uk/forecast/gcpvj0v07" }
+  ],
+  "created_at": "2026-04-03T14:15:05.605Z"
+}
