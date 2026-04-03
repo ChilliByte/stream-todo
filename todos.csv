@@ -172,3 +172,4 @@ Log in profile MD to avoid repeating the same instruction to me sequentially, su
 "167","2026-04-03T23:15:13.107Z","Delete the Italian book thing too","misc","low","false","","true","2026-04-04T00:13:00.000Z","true",""
 "168","2026-04-03T23:15:57.535Z","Also delete the Poundland item","misc","low","false","","true","2026-04-03T23:15:58.000Z","true",""
 "169","2026-04-03T23:20:03.678Z","Done?","misc","low","false","","true","2026-04-04T00:20:00.000Z","true",""
+"170","2026-04-03T23:21:20.678Z","Seems like there's like 10 empty items on the misc section, and two bugged items with NaN timestamp","misc","low","false","","true","2026-04-04T00:21:00.000Z","true",""
