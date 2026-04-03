@@ -168,3 +168,5 @@ Log in profile MD to avoid repeating the same instruction to me sequentially, su
 "163","2026-04-04T00:00:00.000Z","Reply to Ben","errands","medium","false","2026-04-04T10:00:00","false","","false",""
 "164","2026-04-04T00:00:00.000Z","Reply to Ieva","errands","medium","false","2026-04-04T10:00:00","false","","false",""
 "165","2026-04-04T00:03:30.000Z","Modify frontend to show stored timestamp from CSV; update tier 1 to set timestamp on processing","misc","medium","false","","true","2026-04-04T00:03:30.000Z","true",""
+"166","2026-04-03T23:13:48.283Z","Ask tier 3 to clear all misc items","misc","low","false","","true","2026-04-03T23:13:48.283Z","true",""
+"167","2026-04-03T23:15:13.107Z","Delete the Italian book thing too","","","true","","false","","false",""
