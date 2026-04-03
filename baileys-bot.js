@@ -9,7 +9,8 @@ import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
-  downloadMediaMessage
+  downloadMediaMessage,
+  Browsers
 } from '@whiskeysockets/baileys'
 import { Boom } from '@hapi/boom'
 import pino from 'pino'
@@ -26,6 +27,11 @@ import { spawn, execSync } from 'child_process'
 import ffmpegInstaller from '@ffmpeg-installer/ffmpeg'
 import ffmpegLib from 'fluent-ffmpeg'
 import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts'
+import cron from 'node-cron'
+import { runTier1 } from './tier1.js'
+import { runTier2 } from './tier2.js'
+import { generateDailyDigest } from './digest.js'
+import { createEvent as gcalCreateEvent } from './gcal.js'
 
 dotenv.config()
 ffmpegLib.setFfmpegPath(ffmpegInstaller.path)
@@ -37,12 +43,28 @@ const INBOX_PATH     = path.join(__dirname, 'inbox.json')
 const OUTBOX_PATH    = path.join(__dirname, 'outbox.json')
 const MSGKEYS_PATH   = path.join(__dirname, 'message_keys.json')
 const SCHEDULED_PATH = path.join(__dirname, 'scheduled.json')
-const AUTH_DIR       = path.join(__dirname, 'auth_info')
-const BRIEFS_DIR     = path.join(__dirname, 'briefs')
+const AUTH_DIR        = path.join(__dirname, 'auth_info')
+const BRIEFS_DIR      = path.join(__dirname, 'briefs')
+const WORLD_STATE_PATH = path.join(__dirname, 'world_state.json')
+const DIGEST_PATH      = path.join(__dirname, 'daily_digest.json')
 
 const MY_PHONE = process.env.MY_PHONE
 if (!MY_PHONE) { console.error('MY_PHONE not set in .env'); process.exit(1) }
 const MY_JID = `${MY_PHONE}@s.whatsapp.net`
+
+// All JIDs allowed to interact with the bot (bot number + personal number)
+const WHITELISTED_JIDS = new Set([
+  // Standard @s.whatsapp.net JID
+  `${MY_PHONE}@s.whatsapp.net`,
+  ...(process.env.MY_PERSONAL_PHONE ? [`${process.env.MY_PERSONAL_PHONE}@s.whatsapp.net`] : []),
+  // WhatsApp @lid (Linked ID) format — newer devices send messages via @lid instead of @s.whatsapp.net
+  // MY_LID is auto-detected from auth_info/creds.json on first run, or set manually in .env
+  ...(process.env.MY_LID ? [`${process.env.MY_LID}@lid`] : []),
+])
+console.log('[bot] Whitelisted JIDs:', [...WHITELISTED_JIDS].join(', '))
+
+// Local server auth token — set LOCAL_TOKEN in .env to enable, otherwise open
+const LOCAL_TOKEN = process.env.LOCAL_TOKEN || null
 
 const GROQ_API_KEY = process.env.GROQ_API_KEY
 if (!GROQ_API_KEY) { console.error('GROQ_API_KEY not set in .env'); process.exit(1) }
@@ -51,6 +73,9 @@ const VOICE_MIN_LENGTH = 30 // below this, always send text regardless of voice 
 
 const git = simpleGit(__dirname)
 let sock = null
+let _wsConnected = false  // true only when WhatsApp connection is 'open'
+let _reconnecting = false // guard against multiple concurrent startBot calls
+let _socketGen = 0        // incremented each startBot; stale event handlers self-ignore
 
 // Ping / thanks patterns — handled immediately without Claude
 const PING_RE   = /^(hey|hello|hi|test|are you (there|on|alive|up)|ping|you there|u there)[\s?!.]*$/i
@@ -126,9 +151,31 @@ async function transcribeAudio(audioBuffer) {
   return ((await res.json()).text || '').trim()
 }
 
-// ── Voice — synthesis (Edge Neural TTS) ──────────────────────
+// ── Voice — synthesis ─────────────────────────────────────────
+// Uses Groq Orpheus TTS when available; falls back to Edge Neural TTS.
+// To enable Groq TTS: accept terms at console.groq.com/playground?model=canopylabs/orpheus-v1-english
+// then set GROQ_TTS=1 in .env
+
+const GROQ_TTS_ENABLED = process.env.GROQ_TTS === '1'
+const GROQ_TTS_VOICE   = process.env.GROQ_VOICE || 'tara'
 
 async function synthesizeSpeech(text) {
+  if (GROQ_TTS_ENABLED) {
+    const res = await fetch('https://api.groq.com/openai/v1/audio/speech', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'canopylabs/orpheus-v1-english',
+        input: text,
+        voice: GROQ_TTS_VOICE,
+        response_format: 'mp3'
+      })
+    })
+    if (!res.ok) throw new Error(`Groq TTS ${res.status}: ${await res.text()}`)
+    return Buffer.from(await res.arrayBuffer())
+  }
+
+  // Fallback: Edge Neural TTS
   const tts = new MsEdgeTTS()
   await tts.setMetadata(EDGE_VOICE, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3)
   const { audioStream } = tts.toStream(text)
@@ -191,10 +238,22 @@ async function smartSend(jid, text, forceTts = false) {
 
 // ── Context — track last bot message for "Done" detection ─────
 
+const HISTORY_LIMIT = 15
+
+function appendHistory(role, text) {
+  if (!text?.trim()) return
+  const s = readState()
+  const history = s.conversation_history || []
+  history.push({ role, text: text.trim(), ts: new Date().toISOString() })
+  s.conversation_history = history.slice(-HISTORY_LIMIT)
+  writeState(s)
+}
+
 function storeLastBotMessage(text, todoId = null) {
   const s = readState()
   s.last_bot_message = { text, todo_id: todoId, sent_at: new Date().toISOString() }
   writeState(s)
+  if (text?.trim()) appendHistory('assistant', text)
 }
 
 // Detect "Done", "did it", "ok", "sorted", etc.
@@ -238,7 +297,169 @@ function scheduleHourglass(msg, jid) {
   pendingHourglass.set(msgKey.id, { msgKey, jid, timer, isSet: false })
 }
 
+// ── Bot-level instant commands (no Claude needed) ─────────────
+
+const CMD_LIST    = /^(list|my list|what'?s? on my list|show( my)? (list|tasks|todos))[\s?!.]*$/i
+const CMD_TODAY   = /^(today|reminders?( today)?|what'?s? (on )?today)[\s?!.]*$/i
+const CMD_DONE_N  = /^(done|complete[d]?)\s+#?(\d+)[\s!.]*$/i
+const CMD_DELETE_N = /^(delete|remove|cancel)\s+#?(\d+)[\s!.]*$/i
+const CMD_SNOOZE_N = /^snooze\s+#(\d+)(\s+(.+?))?[\s!.]*$/i
+
+function formatTodoList() {
+  const rows = readCSV()
+  const active = rows.filter(r => r.archived !== 'true' && r.completed !== 'true')
+  if (!active.length) return "Your list is clear 🎉"
+
+  const byCategory = {}
+  for (const r of active) {
+    const cat = r.category || 'misc'
+    byCategory[cat] = byCategory[cat] || []
+    byCategory[cat].push(r)
+  }
+
+  const lines = []
+  for (const [cat, items] of Object.entries(byCategory)) {
+    lines.push(`*${cat.toUpperCase()}*`)
+    for (const r of items) {
+      const flag = r.priority === 'high' ? ' ⚠️' : ''
+      lines.push(`  #${r.id} ${r.raw_message}${flag}`)
+    }
+  }
+  return lines.join('\n')
+}
+
+function formatTodayReminders() {
+  let entries = []
+  try { entries = JSON.parse(fs.readFileSync(SCHEDULED_PATH, 'utf8')) } catch {}
+
+  const now = new Date()
+  const todayStr = now.toLocaleDateString('en-GB', { timeZone: 'Europe/London' })
+
+  const todayEntries = entries.filter(e => {
+    if (!e.send_at) return false
+    const d = new Date(e.send_at)
+    return d.toLocaleDateString('en-GB', { timeZone: 'Europe/London' }) === todayStr && d > now
+  })
+
+  if (!todayEntries.length) return "Nothing else scheduled for today."
+
+  todayEntries.sort((a, b) => new Date(a.send_at) - new Date(b.send_at))
+  const lines = ["Upcoming today:"]
+  for (const e of todayEntries) {
+    const t = new Date(e.send_at).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' })
+    lines.push(`  ${t} — ${e.text}`)
+  }
+  return lines.join('\n')
+}
+
+// Returns true if the message was handled as a command (no Claude needed)
+async function handleCommand(jid, msg, text) {
+  // list
+  if (CMD_LIST.test(text)) {
+    await sock.sendMessage(jid, { text: formatTodoList() })
+    return true
+  }
+
+  // today's reminders
+  if (CMD_TODAY.test(text)) {
+    await sock.sendMessage(jid, { text: formatTodayReminders() })
+    return true
+  }
+
+  // done #N
+  const doneMatch = text.match(CMD_DONE_N)
+  if (doneMatch) {
+    const id = doneMatch[2]
+    const rows = readCSV()
+    const row  = rows.find(r => r.id === id)
+    if (!row) {
+      await sock.sendMessage(jid, { text: `No task #${id} found.` })
+      return true
+    }
+    if (row.completed === 'true') {
+      await sock.sendMessage(jid, { text: `#${id} was already done.` })
+      return true
+    }
+    row.completed = 'true'
+    row.completed_at = new Date().toISOString()
+    writeCSV(rows)
+    gitSync(`complete: ${row.raw_message.slice(0, 40)}`).catch(() => {})
+    sock.sendMessage(jid, { react: { text: '✅', key: msg.key } }).catch(() => {})
+    console.log(`[bot] done #${id} via command: "${row.raw_message}"`)
+    return true
+  }
+
+  // delete #N
+  const deleteMatch = text.match(CMD_DELETE_N)
+  if (deleteMatch) {
+    const id = deleteMatch[2]
+    const rows = readCSV()
+    const row  = rows.find(r => r.id === id)
+    if (!row) {
+      await sock.sendMessage(jid, { text: `No task #${id} found.` })
+      return true
+    }
+    row.archived = 'true'
+    writeCSV(rows)
+    gitSync(`remove: ${row.raw_message.slice(0, 40)}`).catch(() => {})
+    sock.sendMessage(jid, { react: { text: '🗑️', key: msg.key } }).catch(() => {})
+    console.log(`[bot] deleted #${id} via command: "${row.raw_message}"`)
+    return true
+  }
+
+  // snooze #N [duration]
+  const snoozeNMatch = text.match(CMD_SNOOZE_N)
+  if (snoozeNMatch) {
+    const id = snoozeNMatch[1]
+    const durationHint = snoozeNMatch[3]?.trim() || null
+    const rows = readCSV()
+    const row  = rows.find(r => r.id === id)
+    if (!row) {
+      await sock.sendMessage(jid, { text: `No task #${id} found.` })
+      return true
+    }
+    appendInbox({ type: 'snooze', todo_id: id, duration_hint: durationHint, timestamp: new Date().toISOString() })
+    showTyping(jid)
+    scheduleHourglass(msg, jid)
+    runTier1Processor(null, null, jid).catch(e => console.error('[tier1]', e.message))
+    return true
+  }
+
+  return false
+}
+
 // ── Processor ─────────────────────────────────────────────────
+
+// Write a slim context file so Claude doesn't need to scan the full CSV
+function writeProcessorContext() {
+  const rows = readCSV()
+  const newItems  = rows.filter(r => r.new === 'true')
+  const active    = rows.filter(r => r.archived !== 'true' && r.completed !== 'true')
+  const recentDone = rows
+    .filter(r => r.completed === 'true' && r.completed_at &&
+      (Date.now() - new Date(r.completed_at).getTime()) < 48 * 3600 * 1000)
+    .slice(-5)
+
+  const byCategory = {}
+  active.forEach(r => {
+    const c = r.category || 'misc'
+    byCategory[c] = (byCategory[c] || 0) + 1
+  })
+
+  const ctx = {
+    new_items: newItems,
+    recently_completed: recentDone,
+    active_count: active.length,
+    by_category: byCategory,
+    generated_at: new Date().toISOString()
+  }
+  fs.writeFileSync(path.join(__dirname, 'processor_context.json'), JSON.stringify(ctx, null, 2))
+  return newItems.length
+}
+
+// Track last proactive check to avoid running it every message
+let _lastProactiveCheck = 0
+const PROACTIVE_INTERVAL_MS = 60 * 60 * 1000 // at most once per hour
 
 function buildProcessorPrompt() {
   const now = new Date()
@@ -254,26 +475,191 @@ function buildProcessorPrompt() {
     ? `Last message you sent Deep: "${lastBotMsg.text.slice(0, 100)}" (at ${lastBotMsg.sent_at}${lastBotMsg.todo_id ? `, todo #${lastBotMsg.todo_id}` : ''})`
     : ''
 
+  const newCount = writeProcessorContext()
+
+  // Only run proactive pattern checks if no urgent new items, and at most once/hour
+  const doProactive = newCount === 0 || (Date.now() - _lastProactiveCheck > PROACTIVE_INTERVAL_MS)
+  if (doProactive) _lastProactiveCheck = Date.now()
+
+  const proactiveLine = doProactive
+    ? 'Also scan todos.csv for proactive patterns (per CLAUDE.md) and flag anything genuinely worth mentioning.'
+    : '' // skip proactive scan to keep this run fast
+
+  const gitCmd = 'git -C "' + __dirname.replace(/\\/g, '\\\\') + '" add todos.csv profile.md outbox.json scheduled.json inbox.json briefs/ && git -C "' + __dirname.replace(/\\/g, '\\\\') + '" commit -m "secretary" && git -C "' + __dirname.replace(/\\/g, '\\\\') + '" push'
+
   return [
     `Current time: ${timeStr} (ISO: ${now.toISOString()}).`,
     contextLine,
-    'Read CLAUDE.md for your brief. Read profile.md for preferences. Read todos.csv and inbox.json.',
+    'Read CLAUDE.md for your brief. Read profile.md for preferences.',
+    'Your work queue is in processor_context.json — read that first. It contains only the items that need processing (new_items) plus recent context. Do NOT read the full todos.csv unless you need to edit a specific row by ID.',
+    'Read inbox.json for any replies or snooze requests.',
     'Act as Deep\'s personal secretary.',
-    'For every new=true item: clean the text to a clear imperative, categorise, set priority, set new=false.',
-    'Use the exact current time above to resolve relative times ("in 30 mins", "in an hour" → correct ISO timestamp).',
-    'If inbox contains a reply like "done", "sorted", "did it" and context shows a recent todo, mark that todo complete in todos.csv.',
-    'IMPORTANT: Never write entries with empty or null text to outbox.json — skip silently instead.',
+    'For every item in new_items: clean the text, categorise, set priority, set new=false in todos.csv.',
+    'For research items ("find X", "look up X"): write a brief to briefs/{id}.json, set brief_file in todos.csv, and send results via outbox.',
+    'Use the current time to resolve relative times ("in 30 mins" → correct ISO timestamp).',
+    'If inbox contains "done"/"sorted" and context shows a recent todo, mark it complete in todos.csv.',
+    'IMPORTANT: Never write empty or null text to outbox.json.',
     'For silently processed items: outbox.json [{type:"react",emoji:"🫡",todo_id:"<id>"}].',
-    'For questions/messages: outbox.json [{to:"' + MY_PHONE + '@s.whatsapp.net",text:"<short spoken-friendly message>",pending_question_item_id:"<id or null>"}].',
-    'Scheduled reminders: scheduled.json [{text:"<spoken-friendly reminder>",send_at:"<ISO>",todo_id:"<id>"}] — ALWAYS include todo_id.',
-    'After processing, update todos.csv and profile.md.',
-    'Then run: git -C "' + __dirname.replace(/\\/g, '\\\\') + '" add todos.csv profile.md outbox.json scheduled.json inbox.json briefs/ && git -C "' + __dirname.replace(/\\/g, '\\\\') + '" commit -m "secretary" && git -C "' + __dirname.replace(/\\/g, '\\\\') + '" push'
+    'For messages to Deep: outbox.json [{to:"' + MY_PHONE + '@s.whatsapp.net",text:"<short spoken-friendly message>",pending_question_item_id:"<id or null>"}].',
+    'Scheduled reminders: scheduled.json [{text:"<spoken-friendly reminder>",send_at:"<ISO>",todo_id:"<id>"}] — always include todo_id.',
+    proactiveLine,
+    'After processing, write todos.csv and profile.md.',
+    'Then run: ' + gitCmd
   ].filter(Boolean).join(' ')
 }
 
+// ── Tier 1: reactive processor (direct haiku API call) ────────
+
+let _tier1Running = false
+let _tier1Queued  = false  // a message arrived while tier1 was busy — re-run after
+
+async function runTier1Processor(newItemId, msg, jid) {
+  if (_tier1Running) {
+    // Mark that we need another pass — item is already written to CSV with new=true
+    _tier1Queued = true
+    console.log('[tier1] Already running — will re-run after current pass')
+    return
+  }
+  _tier1Running = true
+  _tier1Queued  = false
+
+  try {
+    // Gather the new item(s) and inbox — snapshot IDs so we only mark *these* as processed
+    const rows     = readCSV()
+    const newItems = rows.filter(r => r.new === 'true')
+    const processedIds = new Set(newItems.map(r => r.id))
+    const inbox    = readInbox()
+
+    // Log user messages into conversation history
+    for (const item of newItems) {
+      if (item.raw_message) appendHistory('user', item.raw_message)
+    }
+
+    console.log(`[tier1] Processing ${newItems.length} item(s) via haiku API`)
+
+    const result = await runTier1(newItems, inbox)
+
+    // Apply todos_update
+    {
+      const latest = readCSV()
+      let changed = false
+      if (result.todos_update?.length) {
+        for (const upd of result.todos_update) {
+          const row = latest.find(r => r.id === String(upd.id))
+          if (!row) continue
+          if (upd.category)    { row.category    = upd.category;    changed = true }
+          if (upd.priority)    { row.priority    = upd.priority;    changed = true }
+          if (upd.reminder_at !== undefined) { row.reminder_at = upd.reminder_at || ''; changed = true }
+          row.new = 'false'
+          changed = true
+        }
+      }
+      // Only mark items that were in THIS batch as processed (not ones that arrived mid-run)
+      for (const row of latest) {
+        if (row.new === 'true' && processedIds.has(row.id)) { row.new = 'false'; changed = true }
+      }
+      if (changed) writeCSV(latest)
+    }
+
+    // Clear inbox now that it's been processed
+    fs.writeFileSync(INBOX_PATH, '[]')
+
+    // Merge Tier 1 schedules into scheduled.json
+    if (result.schedule?.length) {
+      const existing = readJSON(SCHEDULED_PATH, [])
+      const merged = [...existing, ...result.schedule]
+      fs.writeFileSync(SCHEDULED_PATH, JSON.stringify(merged, null, 2))
+      console.log(`[tier1] Scheduled ${result.schedule.length} reminder(s)`)
+    }
+
+    // Send reply or react
+    if (result.react_only) {
+      // Send 🫡 react to the triggering message
+      if (newItemId && msg) {
+        let keys = {}
+        try { keys = JSON.parse(fs.readFileSync(MSGKEYS_PATH, 'utf8')) } catch {}
+        const msgKey = keys[newItemId]
+        if (msgKey) {
+          // Clear hourglass
+          const hEntry = pendingHourglass.get(msgKey.id)
+          if (hEntry) { clearTimeout(hEntry.timer); pendingHourglass.delete(msgKey.id) }
+          await sock?.sendMessage(msgKey.remoteJid, { react: { text: '🫡', key: msgKey } })
+        }
+      }
+    } else if (result.reply?.trim()) {
+      // Clear hourglasses before sending
+      for (const [id, hEntry] of pendingHourglass.entries()) {
+        clearTimeout(hEntry.timer)
+        if (hEntry.isSet) {
+          sock?.sendMessage(hEntry.jid, { react: { text: '', key: hEntry.msgKey } }).catch(() => {})
+        }
+        pendingHourglass.delete(id)
+      }
+      await smartSend(jid || MY_JID, result.reply)
+      clearTyping(jid || MY_JID)
+      storeLastBotMessage(result.reply, newItemId)
+    }
+
+    // Append profile_note directly to profile.md
+    if (result.profile_note?.trim()) {
+      try {
+        const profilePath = path.join(__dirname, 'profile.md')
+        const existing = fs.existsSync(profilePath) ? fs.readFileSync(profilePath, 'utf8') : ''
+        const date = new Date().toLocaleDateString('en-GB', { timeZone: 'Europe/London' })
+        const note = `\n- ${result.profile_note.trim()} (${date})`
+        fs.appendFileSync(profilePath, note)
+        console.log(`[tier1] profile_note appended: ${result.profile_note.slice(0, 60)}`)
+      } catch (e) {
+        console.error('[tier1] Failed to write profile_note:', e.message)
+      }
+    }
+
+    // Flag research item for Tier 3 (claude.exe)
+    if (result.needs_research && result.research_item_id) {
+      console.log(`[tier1] Flagging #${result.research_item_id} for research (Tier 3)`)
+      runProcessor()
+    }
+
+    // Flag cleanup for Tier 3 (claude.exe)
+    if (result.needs_cleanup) {
+      console.log('[tier1] Cleanup requested — queuing Tier 3')
+      runProcessor('CLEANUP TASK: Deep asked you to tidy the todo list. Remove any blank items, duplicate items, or items that are clearly noise (e.g. messages that were accidentally logged as todos). Do NOT remove real tasks. Confirm what you removed in outbox.json.')
+    }
+
+    // Git sync
+    gitSync(`tier1: processed ${newItems.length} item(s)`).catch(() => {})
+
+    console.log(`[tier1] Done — react_only:${result.react_only}, reply:${!!result.reply}, research:${result.needs_research}, cleanup:${result.needs_cleanup}`)
+  } catch (e) {
+    console.error('[tier1] Error:', e.message)
+    // If token is dead, trigger background refresh via claude.exe
+    if (String(e.message).includes('401')) refreshTokenViaClaude().catch(() => {})
+    // Fallback to legacy processor on failure
+    runProcessor()
+  } finally {
+    _tier1Running = false
+    // If a message arrived while we were running, process it now
+    if (_tier1Queued) {
+      _tier1Queued = false
+      const leftover = readCSV().filter(r => r.new === 'true')
+      if (leftover.length > 0) {
+        console.log(`[tier1] ${leftover.length} item(s) arrived during run — processing now`)
+        runTier1Processor(null, null, MY_JID).catch(e => console.error('[tier1]', e.message))
+      }
+    }
+  }
+}
+
+function readJSON(filePath, fallback) {
+  try { return JSON.parse(fs.readFileSync(filePath, 'utf8')) }
+  catch { return fallback }
+}
+
+// ── Legacy Tier 3 processor (claude.exe — research & proactive) ──
+
 let _processorRunning = false
 
-function runProcessor() {
+function runProcessor(extraPrompt = '') {
   if (_processorRunning) { console.log('[bot] Processor already running, skipping'); return }
   let claudeExe
   try { claudeExe = findClaudeExe() }
@@ -283,7 +669,8 @@ function runProcessor() {
 
   // Write prompt to file — avoids quote mangling when shell parses the command line
   const promptFile = path.join(__dirname, 'processor_prompt.txt')
-  fs.writeFileSync(promptFile, buildProcessorPrompt(), 'utf8')
+  const prompt = extraPrompt ? buildProcessorPrompt() + '\n\n' + extraPrompt : buildProcessorPrompt()
+  fs.writeFileSync(promptFile, prompt, 'utf8')
 
   const logPath = path.join(__dirname, 'processor.log')
 
@@ -332,15 +719,72 @@ function buildCleanupPrompt() {
 }
 
 function runCleanup() {
+  if (_processorRunning) { console.log('[cleanup] Processor already running, skipping'); return }
   let claudeExe
   try { claudeExe = findClaudeExe() }
   catch (e) { console.error('[cleanup]', e.message); return }
 
-  const proc = spawn(claudeExe, ['--print', '--dangerously-skip-permissions', buildCleanupPrompt()], {
-    cwd: __dirname, detached: true, stdio: 'ignore', env: process.env
+  _processorRunning = true
+
+  // Write prompt to file — avoids quote mangling on Windows
+  const promptFile = path.join(__dirname, 'processor_prompt.txt')
+  fs.writeFileSync(promptFile, buildCleanupPrompt(), 'utf8')
+
+  const logPath = path.join(__dirname, 'processor.log')
+  const safeArg = 'Read the file processor_prompt.txt in the current directory and follow the instructions in it exactly.'
+  const proc = spawn(claudeExe, ['--print', '--dangerously-skip-permissions', safeArg], {
+    cwd: __dirname, windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe'], env: process.env
   })
-  proc.unref()
-  console.log('[cleanup] Nightly maintenance run started')
+
+  const log = fs.createWriteStream(logPath, { flags: 'a' })
+  proc.stdout?.pipe(log)
+  proc.stderr?.pipe(log)
+
+  proc.on('error', e => { _processorRunning = false; console.error('[cleanup] spawn error:', e.message) })
+  proc.on('close', code => {
+    _processorRunning = false
+    log.end()
+    console.log(`[cleanup] Nightly maintenance run finished (code ${code})`)
+    processOutbox().catch(console.error)
+  })
+
+  console.log('[cleanup] Nightly maintenance run started (pid ' + proc.pid + ')')
+}
+
+async function recoverMissedReminders() {
+  let entries = []
+  try { entries = JSON.parse(fs.readFileSync(SCHEDULED_PATH, 'utf8')) } catch { return }
+  if (!entries.length) return
+
+  const now = new Date()
+  const remaining = []
+  let recovered = 0
+
+  for (const entry of entries) {
+    if (!entry?.send_at || !entry?.text) continue  // skip malformed entries
+    const sendAt = new Date(entry.send_at)
+    if (isNaN(sendAt.getTime())) continue
+    const ageMs = now - sendAt
+    if (sendAt <= now && ageMs <= 30 * 60 * 1000) {
+      try {
+        await smartSend(MY_JID, `(Missed) ${entry.text}`)
+        if (entry.todo_id) storeLastBotMessage(entry.text, entry.todo_id)
+        recovered++
+      } catch (e) {
+        console.error('[recovery]', e.message)
+        remaining.push(entry)
+      }
+    } else if (sendAt > now) {
+      remaining.push(entry)
+    }
+    // older than 30 min: drop silently
+  }
+
+  if (recovered > 0 || remaining.length !== entries.length) {
+    fs.writeFileSync(SCHEDULED_PATH, JSON.stringify(remaining, null, 2))
+    if (recovered > 0) console.log(`[recovery] Sent ${recovered} missed reminder(s)`)
+  }
 }
 
 async function checkCleanup() {
@@ -358,8 +802,9 @@ async function checkCleanup() {
 }
 
 async function gitSync(msg = 'update') {
+  if (_processorRunning) return // processor will handle git commit
   try {
-    await git.add('todos.csv')
+    await git.add(['todos.csv', 'profile.md'])
     const status = await git.status()
     if (status.staged.length > 0) { await git.commit(msg); await git.push() }
   } catch (e) { console.error('[git]', e.message) }
@@ -392,10 +837,13 @@ async function handleMessage(msg, text) {
     return
   }
 
+  // Instant bot-level commands — handled without Claude
+  if (await handleCommand(jid, msg, text)) return
+
   // Show typing while we work on it
   showTyping(jid)
 
-  // UPDATES command (from frontend edit system)
+  // UPDATES command (from frontend edit system) — route to legacy processor (full context needed)
   if (text.startsWith('UPDATES\n') || text.startsWith('UPDATES\r\n')) {
     appendInbox({ type: 'updates', text, timestamp: new Date().toISOString() })
     scheduleHourglass(msg, jid)
@@ -403,14 +851,27 @@ async function handleMessage(msg, text) {
     return
   }
 
-  // Reply to a pending question
+  // Reply to a pending question (expires after 24h to prevent future messages being misrouted)
   if (state.pending_question_item_id) {
-    appendInbox({ type: 'reply', text, item_id: state.pending_question_item_id, timestamp: new Date().toISOString() })
+    const questionAge = state.pending_question_asked_at
+      ? Date.now() - new Date(state.pending_question_asked_at).getTime()
+      : Infinity
+    if (questionAge < 24 * 3600 * 1000) {
+      const questionItemId = state.pending_question_item_id
+      appendInbox({ type: 'reply', text, item_id: questionItemId, timestamp: new Date().toISOString() })
+      state.pending_question_item_id = null
+      state.pending_question_asked_at = null
+      writeState(state)
+      scheduleHourglass(msg, jid)
+      // Replies to questions go through Tier 1 with inbox context
+      runTier1Processor(questionItemId, msg, jid).catch(e => console.error('[tier1]', e.message))
+      return
+    }
+    // Stale question — clear and fall through to normal handling
+    console.log(`[bot] Pending question expired (>24h), treating as new item`)
     state.pending_question_item_id = null
+    state.pending_question_asked_at = null
     writeState(state)
-    scheduleHourglass(msg, jid)
-    runProcessor()
-    return
   }
 
   // Completion signal ("Done", "sorted", etc.) — check if we have context
@@ -431,6 +892,10 @@ async function handleMessage(msg, text) {
         return
       }
     }
+    // No fresh context — don't create a garbage todo, ask instead
+    clearTyping(jid)
+    await sock.sendMessage(jid, { text: "Which item's done? Say 'done #N' with the number." })
+    return
   }
 
   // Snooze request — pass to Claude with todo context
@@ -446,10 +911,13 @@ async function handleMessage(msg, text) {
         timestamp: new Date().toISOString()
       })
       scheduleHourglass(msg, jid)
-      runProcessor()
+      runTier1Processor(null, null, jid).catch(e => console.error('[tier1]', e.message))
       return
     }
-    // No context — fall through and treat as a new item
+    // No context — don't create a garbage todo, ask instead
+    clearTyping(jid)
+    await sock.sendMessage(jid, { text: "Snooze which item? Say 'snooze #N' or 'snooze #N 2h'." })
+    return
   }
 
   // New to-do item
@@ -463,18 +931,14 @@ async function handleMessage(msg, text) {
   writeCSV(rows)
 
   // Store message key for reactions and future ✅ acks
-  try {
-    const keys = JSON.parse(fs.readFileSync(MSGKEYS_PATH, 'utf8'))
-    keys[newId] = msg.key
-    fs.writeFileSync(MSGKEYS_PATH, JSON.stringify(keys, null, 2))
-  } catch {
-    fs.writeFileSync(MSGKEYS_PATH, JSON.stringify({ [newId]: msg.key }, null, 2))
-  }
+  let keys = {}
+  try { keys = JSON.parse(fs.readFileSync(MSGKEYS_PATH, 'utf8')) } catch {}
+  keys[newId] = msg.key
+  fs.writeFileSync(MSGKEYS_PATH, JSON.stringify(keys, null, 2))
 
   console.log(`[bot] Stored #${newId}: "${text}"`)
-  gitSync(`add: ${text.slice(0, 40)}`).catch(() => {})
   scheduleHourglass(msg, jid)
-  runProcessor()
+  runTier1Processor(newId, msg, jid).catch(e => console.error('[tier1]', e.message))
 }
 
 // ── Outbox polling ────────────────────────────────────────────
@@ -486,11 +950,24 @@ async function processOutbox() {
   const messages = readOutbox()
   if (!messages.length) return
   outboxRunning = true
-  fs.writeFileSync(OUTBOX_PATH, '[]')
+  // DON'T clear here — write back only what fails at the end
 
+  const failed = []
   for (const msg of messages) {
     try {
-      if (msg.type === 'react') {
+      if (msg.type === 'calendar') {
+        try {
+          const endTime = msg.end || new Date(new Date(msg.start).getTime() + 60 * 60 * 1000).toISOString()
+          const event   = await gcalCreateEvent({ title: msg.title, start: msg.start, end: endTime, description: msg.description || '' })
+          const day     = new Date(msg.start).toLocaleDateString('en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short' })
+          const time    = new Date(msg.start).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' })
+          await smartSend(MY_JID, `📅 Added to calendar — ${msg.title}, ${day} at ${time}`)
+          console.log(`[gcal] Event created: ${msg.title}`)
+        } catch (e) {
+          console.error('[gcal] Failed to create event:', e.message)
+          await smartSend(MY_JID, `Couldn't add to calendar — ${e.message.includes('token') ? 'run: node gcal.js setup' : e.message}`)
+        }
+      } else if (msg.type === 'react') {
         let keys = {}
         try { keys = JSON.parse(fs.readFileSync(MSGKEYS_PATH, 'utf8')) } catch {}
         const msgKey = keys[msg.todo_id]
@@ -521,18 +998,26 @@ async function processOutbox() {
         await smartSend(jid, msg.text)
         clearTyping(jid)
         if (msg.pending_question_item_id) {
-          const s = readState(); s.pending_question_item_id = msg.pending_question_item_id; writeState(s)
+          const s = readState()
+          s.pending_question_item_id = msg.pending_question_item_id
+          s.pending_question_asked_at = new Date().toISOString()
+          writeState(s)
         }
       }
-    } catch (e) { console.error('[outbox]', e.message) }
+    } catch (e) {
+      console.error('[outbox]', e.message)
+      failed.push(msg)
+    }
   }
+  // Write back only what failed (or empty if all succeeded)
+  fs.writeFileSync(OUTBOX_PATH, JSON.stringify(failed, null, 2))
   outboxRunning = false
 }
 
 // ── Scheduled messages ────────────────────────────────────────
 
 async function checkScheduled() {
-  if (!sock) return
+  if (!sock || !_wsConnected) return
   let entries = []
   try { entries = JSON.parse(fs.readFileSync(SCHEDULED_PATH, 'utf8')) } catch { return }
   if (!entries.length) return
@@ -542,8 +1027,11 @@ async function checkScheduled() {
   let changed = false
 
   for (const entry of entries) {
+    if (!entry?.send_at || !entry?.text) continue  // skip malformed entries
     const sendAt = new Date(entry.send_at)
-    if (sendAt <= now && sendAt > new Date(now - 5 * 60 * 1000)) {
+    if (isNaN(sendAt.getTime())) continue  // skip invalid dates
+    if (sendAt <= now && sendAt > new Date(now - 15 * 60 * 1000)) {
+      if (!sock || !_wsConnected) { remaining.push(entry); continue }  // re-guard (race condition)
       try {
         await smartSend(MY_JID, entry.text)
         if (entry.todo_id) storeLastBotMessage(entry.text, entry.todo_id)
@@ -564,28 +1052,63 @@ async function checkScheduled() {
 // ── WhatsApp connection ───────────────────────────────────────
 
 async function startBot() {
+  const myGen = ++_socketGen    // capture this call's generation
+  _reconnecting = false
+  _wsConnected = false
+
+  // Tear down any existing socket — this fires a 'close' event on the OLD
+  // socket's handler, but that handler checks myGen vs _socketGen and self-ignores.
+  if (sock) {
+    try { sock.end(undefined) } catch {}
+    sock = null
+    await new Promise(r => setTimeout(r, 500))  // let WA server see the close before reconnecting
+  }
+
   const { version } = await fetchLatestBaileysVersion()
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR)
 
   sock = makeWASocket({
     version, auth: state,
     logger: pino({ level: 'silent' }),
-    browser: ['Stream', 'Chrome', '1.0.0'],
-    getMessage: async () => ({ conversation: '' })
+    browser: Browsers.macOS('Desktop'),
+    getMessage: async () => ({ conversation: '' }),
+    syncFullHistory: false,
+    markOnlineOnConnect: false,
   })
 
   sock.ev.on('creds.update', saveCreds)
 
   sock.ev.on('connection.update', ({ connection, lastDisconnect, qr }) => {
+    if (_socketGen !== myGen) return  // stale socket — ignore all its events
     if (qr) { console.log('\n[bot] Scan QR:\n'); qrcode.generate(qr, { small: true }) }
-    if (connection === 'open') console.log('[bot] Connected ✓')
+    if (connection === 'open') {
+      _wsConnected = true
+      console.log('[bot] Connected ✓')
+      // Delay recovery slightly so we know this isn't a transient connection
+      setTimeout(() => {
+        if (_wsConnected && _socketGen === myGen) recoverMissedReminders().catch(console.error)
+      }, 3000)
+    }
     if (connection === 'close') {
+      _wsConnected = false
       const code = lastDisconnect?.error?.output?.statusCode
+      const msg = lastDisconnect?.error?.message || ''
+      console.log(`[bot] Disconnect — code: ${code}, reason: ${msg}`)
       if (code === DisconnectReason.loggedOut) {
         console.log('[bot] Logged out — delete auth_info/ and restart')
+      } else if (code === DisconnectReason.connectionReplaced) {
+        // Another session took over — wait longer before reconnecting
+        if (!_reconnecting) {
+          _reconnecting = true
+          console.log('[bot] Session replaced by another client — reconnecting in 15s...')
+          setTimeout(startBot, 15000)
+        }
+      } else if (!_reconnecting) {
+        _reconnecting = true
+        console.log('[bot] Disconnected, reconnecting in 5s...')
+        setTimeout(startBot, 5000)
       } else {
-        console.log('[bot] Disconnected, reconnecting...')
-        setTimeout(startBot, 3000)
+        console.log('[bot] Reconnect already scheduled, skipping duplicate')
       }
     }
   })
@@ -606,6 +1129,12 @@ async function startBot() {
     for (const msg of messages) {
       if (msg.key.fromMe) continue
       if (msg.key.remoteJid?.endsWith('@g.us')) continue
+      if (msg.key.remoteJid?.endsWith('@broadcast')) continue  // status/broadcast updates
+      if (!WHITELISTED_JIDS.has(msg.key.remoteJid)) {
+        // Log non-whitelisted once per JID so we can identify new @lid JIDs for MY_LID env var
+        console.log(`[bot] Ignored message from non-whitelisted JID: ${msg.key.remoteJid}`)
+        continue
+      }
       if (seenMsgIds.has(msg.key.id)) continue
       markSeen(msg.key.id)
 
@@ -616,7 +1145,6 @@ async function startBot() {
         sock.readMessages([msg.key]).catch(() => {})
         // Show typing during transcription
         showTyping(msg.key.remoteJid)
-        const s = readState(); s.last_was_voice = true; writeState(s)
         try {
           const buf = await downloadMediaMessage(msg, 'buffer', {}, {
             logger: pino({ level: 'silent' }),
@@ -625,11 +1153,14 @@ async function startBot() {
           const transcription = await transcribeAudio(buf)
           if (!transcription) { console.log('[voice] Empty transcription'); continue }
           console.log(`[voice] Transcribed: "${transcription}"`)
+          // Only set last_was_voice after successful transcription
+          const s = readState(); s.last_was_voice = true; writeState(s)
           // handleMessage will re-set typing + schedule hourglass
           handleMessage(msg, transcription).catch(e => console.error('[handler]', e.message))
         } catch (e) {
           console.error('[voice] Transcription error:', e.message)
           clearTyping(msg.key.remoteJid)
+          // Don't set last_was_voice — transcription failed, reply in text
         }
         continue
       }
@@ -692,82 +1223,412 @@ const LOCAL_HTML = `<!DOCTYPE html>
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Stream — Quick Add</title>
+<title>Stream</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
   body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-    background:#f5f5f8;display:flex;align-items:center;justify-content:center;
-    min-height:100vh;padding:24px}
-  .card{background:#fff;border-radius:12px;box-shadow:0 2px 16px rgba(0,0,0,.08);
-    padding:28px 32px;width:100%;max-width:520px}
-  h1{font-size:16px;font-weight:600;color:#111;margin-bottom:4px}
+    background:#f5f5f8;min-height:100vh;padding:24px}
+  .wrap{max-width:680px;margin:0 auto}
+  h1{font-size:18px;font-weight:700;color:#111;margin-bottom:2px}
   .sub{font-size:12px;color:#999;margin-bottom:20px}
-  textarea{width:100%;border:1px solid #e0e0e9;border-radius:8px;padding:12px 14px;
-    font-family:inherit;font-size:14px;resize:none;height:90px;outline:none;
+
+  /* Add card */
+  .card{background:#fff;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,.07);
+    padding:20px 24px;margin-bottom:20px}
+  textarea{width:100%;border:1px solid #e0e0e9;border-radius:8px;padding:10px 12px;
+    font-family:inherit;font-size:14px;resize:none;height:72px;outline:none;
     transition:border .15s;color:#111}
   textarea:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.1)}
-  button{margin-top:12px;width:100%;background:#2563eb;color:#fff;border:none;
-    border-radius:8px;padding:11px;font-size:14px;font-weight:500;cursor:pointer;
+  .add-btn{margin-top:10px;background:#2563eb;color:#fff;border:none;
+    border-radius:8px;padding:9px 18px;font-size:14px;font-weight:500;cursor:pointer;
     transition:background .15s}
-  button:hover{background:#1d4ed8}
-  button:disabled{background:#93c5fd;cursor:default}
-  .toast{display:none;margin-top:12px;padding:10px 14px;border-radius:8px;
-    font-size:13px;text-align:center}
+  .add-btn:hover{background:#1d4ed8}
+  .add-btn:disabled{background:#93c5fd;cursor:default}
+  .toast{display:none;margin-top:10px;padding:8px 12px;border-radius:8px;font-size:13px}
   .toast.ok{background:#dcfce7;color:#166534;display:block}
   .toast.err{background:#fee2e2;color:#991b1b;display:block}
-  .link{margin-top:16px;text-align:center;font-size:12px;color:#999}
-  .link a{color:#2563eb;text-decoration:none}
+
+  /* Filters */
+  .filters{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center}
+  .filters select,.filters input{border:1px solid #e0e0e9;border-radius:6px;padding:5px 9px;
+    font-size:13px;background:#fff;outline:none;color:#333}
+  .filters input{flex:1;min-width:120px}
+  .count{font-size:12px;color:#999;margin-left:auto}
+
+  /* Todo list */
+  .todo-list{display:flex;flex-direction:column;gap:8px}
+  .todo{background:#fff;border-radius:10px;padding:12px 16px;
+    box-shadow:0 1px 4px rgba(0,0,0,.06);display:flex;gap:12px;align-items:flex-start;
+    border-left:3px solid transparent;transition:opacity .2s}
+  .todo.pri-high{border-left-color:#ef4444}
+  .todo.pri-normal{border-left-color:#3b82f6}
+  .todo.pri-low{border-left-color:#d1d5db}
+  .todo.completed{opacity:.45}
+  .todo-check{width:18px;height:18px;accent-color:#2563eb;margin-top:2px;flex-shrink:0;cursor:pointer}
+  .todo-body{flex:1;min-width:0}
+  .todo-msg{font-size:14px;color:#111;line-height:1.4;word-break:break-word}
+  .todo-meta{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;align-items:center}
+  .badge{font-size:11px;padding:2px 7px;border-radius:4px;font-weight:500}
+  .badge-cat{background:#eff6ff;color:#1d4ed8}
+  .badge-pri-high{background:#fef2f2;color:#b91c1c}
+  .badge-pri-normal{background:#f0f9ff;color:#0369a1}
+  .badge-pri-low{background:#f9fafb;color:#6b7280}
+  .badge-reminder{background:#fefce8;color:#854d0e}
+  .badge-id{background:#f3f4f6;color:#9ca3af;font-size:10px}
+  .todo-actions{display:flex;gap:6px;flex-shrink:0}
+  .btn-icon{background:none;border:1px solid #e5e7eb;border-radius:6px;
+    padding:4px 8px;font-size:12px;cursor:pointer;color:#6b7280;
+    transition:all .15s;white-space:nowrap}
+  .btn-icon:hover{background:#f3f4f6;color:#111}
+  .btn-icon.danger:hover{background:#fee2e2;border-color:#fca5a5;color:#dc2626}
+
+  /* Edit modal */
+  .modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);
+    z-index:100;align-items:center;justify-content:center}
+  .modal-bg.open{display:flex}
+  .modal{background:#fff;border-radius:14px;padding:24px 28px;width:100%;max-width:460px;
+    box-shadow:0 8px 40px rgba(0,0,0,.18)}
+  .modal h2{font-size:15px;font-weight:600;margin-bottom:16px}
+  .field{margin-bottom:14px}
+  .field label{display:block;font-size:12px;color:#666;margin-bottom:4px;font-weight:500}
+  .field input,.field select,.field textarea{width:100%;border:1px solid #e0e0e9;border-radius:7px;
+    padding:8px 11px;font-size:13px;font-family:inherit;outline:none;color:#111}
+  .field input:focus,.field select:focus,.field textarea:focus{border-color:#2563eb}
+  .field textarea{resize:vertical;min-height:60px}
+  .modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
+  .btn-save{background:#2563eb;color:#fff;border:none;border-radius:7px;
+    padding:8px 18px;font-size:13px;font-weight:500;cursor:pointer}
+  .btn-save:hover{background:#1d4ed8}
+  .btn-cancel{background:#f3f4f6;color:#374151;border:none;border-radius:7px;
+    padding:8px 14px;font-size:13px;cursor:pointer}
+  .btn-cancel:hover{background:#e5e7eb}
+
+  .loading{text-align:center;color:#999;padding:32px;font-size:14px}
+  .empty{text-align:center;color:#bbb;padding:32px;font-size:14px}
 </style>
 </head>
 <body>
-<div class="card">
+<div class="wrap">
   <h1>Stream</h1>
-  <div class="sub">Add a task or ask Deep's secretary anything</div>
-  <textarea id="t" placeholder="Get milk on the way home&#10;Find a dentist near Balham&#10;Meeting with Arjun Thursday 3pm" autofocus></textarea>
-  <button id="btn" onclick="send()">Add</button>
-  <div class="toast" id="toast"></div>
-  <div class="link"><a href="https://chillibyte.github.io/stream-todo/" target="_blank">Open full dashboard →</a></div>
+  <div class="sub">Deep's task list</div>
+
+  <!-- Add form -->
+  <div class="card">
+    <textarea id="addText" placeholder="Get milk on the way home&#10;Meeting with Arjun Thursday 3pm&#10;Find a good book on Indian independence"></textarea>
+    <button class="add-btn" id="addBtn" onclick="addItem()">Add</button>
+    <div class="toast" id="addToast"></div>
+  </div>
+
+  <!-- Filters -->
+  <div class="filters">
+    <input id="search" placeholder="Search…" oninput="renderList()" />
+    <select id="catFilter" onchange="renderList()">
+      <option value="">All categories</option>
+      <option>errands</option><option>books</option>
+      <option>india-rci</option><option>creative</option><option>misc</option>
+    </select>
+    <select id="priFilter" onchange="renderList()">
+      <option value="">All priorities</option>
+      <option>high</option><option>normal</option><option>low</option>
+    </select>
+    <select id="showFilter" onchange="renderList()">
+      <option value="active">Active</option>
+      <option value="all">All incl. done</option>
+      <option value="completed">Completed</option>
+    </select>
+    <span class="count" id="count"></span>
+  </div>
+
+  <!-- List -->
+  <div class="todo-list" id="list"><div class="loading">Loading…</div></div>
 </div>
+
+<!-- Edit modal -->
+<div class="modal-bg" id="modalBg" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <h2>Edit task</h2>
+    <div class="field"><label>Task</label>
+      <textarea id="eMsg" rows="2"></textarea></div>
+    <div class="field"><label>Category</label>
+      <select id="eCat">
+        <option>errands</option><option>books</option>
+        <option>india-rci</option><option>creative</option><option>misc</option>
+      </select></div>
+    <div class="field"><label>Priority</label>
+      <select id="ePri">
+        <option>high</option><option>normal</option><option>low</option>
+      </select></div>
+    <div class="field"><label>Reminder (leave blank to clear)</label>
+      <input type="datetime-local" id="eReminder"/></div>
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeModal()">Cancel</button>
+      <button class="btn-save" onclick="saveEdit()">Save</button>
+    </div>
+  </div>
+</div>
+
 <script>
-  const t = document.getElementById('t')
-  const btn = document.getElementById('btn')
-  const toast = document.getElementById('toast')
-  t.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) send()
+  let todos = []
+  let editId = null
+  const addText = document.getElementById('addText')
+
+  addText.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) addItem()
   })
-  async function send() {
-    const text = t.value.trim()
+
+  async function load() {
+    try {
+      const r = await fetch('/api/todos')
+      if (!r.ok) throw new Error(r.status)
+      todos = await r.json()
+      renderList()
+    } catch(e) {
+      document.getElementById('list').innerHTML = '<div class="empty">Failed to load — ' + e.message + '</div>'
+    }
+  }
+
+  function renderList() {
+    const search  = document.getElementById('search').value.toLowerCase()
+    const cat     = document.getElementById('catFilter').value
+    const pri     = document.getElementById('priFilter').value
+    const show    = document.getElementById('showFilter').value
+
+    let filtered = todos.filter(t => {
+      if (show === 'active'    && (t.completed === 'true' || t.archived === 'true')) return false
+      if (show === 'completed' && t.completed !== 'true') return false
+      if (cat && t.category !== cat) return false
+      if (pri && t.priority !== pri) return false
+      if (search && !t.raw_message?.toLowerCase().includes(search)) return false
+      return true
+    })
+
+    // Sort: high first, then by id desc
+    filtered.sort((a, b) => {
+      const pOrd = {high:0,normal:1,low:2}
+      const pd = (pOrd[a.priority]||1) - (pOrd[b.priority]||1)
+      return pd !== 0 ? pd : Number(b.id) - Number(a.id)
+    })
+
+    document.getElementById('count').textContent = filtered.length + ' item' + (filtered.length !== 1 ? 's' : '')
+
+    if (!filtered.length) {
+      document.getElementById('list').innerHTML = '<div class="empty">Nothing here</div>'
+      return
+    }
+
+    document.getElementById('list').innerHTML = filtered.map(t => {
+      const done = t.completed === 'true'
+      const pri  = t.priority || 'normal'
+      let reminder = ''
+      if (t.reminder_at) {
+        try {
+          const d = new Date(t.reminder_at)
+          reminder = '<span class="badge badge-reminder">⏰ ' + d.toLocaleString('en-GB',{timeZone:'Europe/London',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) + '</span>'
+        } catch {}
+      }
+      return \`<div class="todo pri-\${pri} \${done?'completed':''}" id="row-\${t.id}">
+        <input type="checkbox" class="todo-check" \${done?'checked':''} onchange="toggleDone('\${t.id}',this.checked)" title="Mark done"/>
+        <div class="todo-body">
+          <div class="todo-msg">\${esc(t.raw_message || '')}</div>
+          <div class="todo-meta">
+            <span class="badge badge-id">#\${t.id}</span>
+            \${t.category ? '<span class="badge badge-cat">'+esc(t.category)+'</span>' : ''}
+            \${t.priority ? '<span class="badge badge-pri-'+pri+'">'+pri+'</span>' : ''}
+            \${reminder}
+          </div>
+        </div>
+        <div class="todo-actions">
+          <button class="btn-icon" onclick="openEdit('\${t.id}')" title="Edit">Edit</button>
+          <button class="btn-icon danger" onclick="archiveItem('\${t.id}')" title="Archive">Archive</button>
+        </div>
+      </div>\`
+    }).join('')
+  }
+
+  function esc(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
+  }
+
+  async function addItem() {
+    const text = addText.value.trim()
     if (!text) return
-    btn.disabled = true
-    btn.textContent = 'Sending…'
+    const btn = document.getElementById('addBtn')
+    const toast = document.getElementById('addToast')
+    btn.disabled = true; btn.textContent = 'Adding…'
     toast.className = 'toast'
     try {
-      const r = await fetch('/add', { method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({text})
+      const r = await fetch('/add', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})})
+      if (!r.ok) throw new Error(await r.text())
+      toast.textContent = '✓ Added — processing…'; toast.className = 'toast ok'
+      addText.value = ''
+      setTimeout(load, 1500) // reload after processor has a moment
+    } catch(e) {
+      toast.textContent = 'Error: ' + e.message; toast.className = 'toast err'
+    }
+    btn.disabled = false; btn.textContent = 'Add'
+  }
+
+  async function toggleDone(id, checked) {
+    await applyUpdate({ id, completed: checked ? 'true' : 'false', completed_at: checked ? new Date().toISOString() : '' })
+  }
+
+  async function archiveItem(id) {
+    if (!confirm('Archive this item?')) return
+    await applyUpdate({ id, archived: 'true' })
+  }
+
+  function openEdit(id) {
+    const t = todos.find(x => x.id === id)
+    if (!t) return
+    editId = id
+    document.getElementById('eMsg').value = t.raw_message || ''
+    document.getElementById('eCat').value = t.category || 'misc'
+    document.getElementById('ePri').value = t.priority || 'normal'
+    if (t.reminder_at) {
+      try {
+        const d = new Date(t.reminder_at)
+        // datetime-local expects YYYY-MM-DDTHH:MM in local time
+        const pad = n => String(n).padStart(2,'0')
+        document.getElementById('eReminder').value =
+          d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) +
+          'T' + pad(d.getHours()) + ':' + pad(d.getMinutes())
+      } catch { document.getElementById('eReminder').value = '' }
+    } else {
+      document.getElementById('eReminder').value = ''
+    }
+    document.getElementById('modalBg').classList.add('open')
+    document.getElementById('eMsg').focus()
+  }
+
+  function closeModal() {
+    document.getElementById('modalBg').classList.remove('open')
+    editId = null
+  }
+
+  async function saveEdit() {
+    if (!editId) return
+    const reminderRaw = document.getElementById('eReminder').value
+    const reminder_at = reminderRaw ? new Date(reminderRaw).toISOString() : ''
+    await applyUpdate({
+      id: editId,
+      raw_message: document.getElementById('eMsg').value.trim(),
+      category:    document.getElementById('eCat').value,
+      priority:    document.getElementById('ePri').value,
+      reminder_at
+    })
+    closeModal()
+  }
+
+  async function applyUpdate(update) {
+    try {
+      const r = await fetch('/api/updates', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ updates: [update] })
       })
       if (!r.ok) throw new Error(await r.text())
-      toast.textContent = '✓ Added — Claude is processing'
-      toast.className = 'toast ok'
-      t.value = ''
-      t.focus()
+      await load()
     } catch(e) {
-      toast.textContent = 'Error: ' + e.message
-      toast.className = 'toast err'
+      alert('Save failed: ' + e.message)
     }
-    btn.disabled = false
-    btn.textContent = 'Add'
   }
+
+  // Poll every 30s to catch bot-side changes
+  load()
+  setInterval(load, 30000)
 </script>
 </body>
 </html>`
+
+const LOGIN_HTML = `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Stream — Login</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    background:#f5f5f8;display:flex;align-items:center;justify-content:center;min-height:100vh}
+  .card{background:#fff;border-radius:12px;box-shadow:0 2px 16px rgba(0,0,0,.08);
+    padding:28px 32px;width:100%;max-width:360px}
+  h1{font-size:16px;font-weight:600;color:#111;margin-bottom:16px}
+  input{width:100%;border:1px solid #e0e0e9;border-radius:8px;padding:10px 14px;
+    font-size:14px;outline:none;margin-bottom:12px}
+  input:focus{border-color:#2563eb}
+  button{width:100%;background:#2563eb;color:#fff;border:none;border-radius:8px;
+    padding:11px;font-size:14px;font-weight:500;cursor:pointer}
+  button:hover{background:#1d4ed8}
+  .err{color:#991b1b;font-size:13px;margin-top:8px;display:none}
+</style></head>
+<body><div class="card">
+  <h1>Stream</h1>
+  <input type="password" id="t" placeholder="Access token" autofocus/>
+  <button onclick="login()">Enter</button>
+  <div class="err" id="e">Wrong token</div>
+</div>
+<script>
+  document.getElementById('t').addEventListener('keydown', e => { if(e.key==='Enter') login() })
+  async function login() {
+    const token = document.getElementById('t').value
+    const r = await fetch('/auth', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token})})
+    if (r.ok) { location.href='/' } else { document.getElementById('e').style.display='block' }
+  }
+</script></body></html>`
+
+function parseCookies(req) {
+  const raw = req.headers.cookie || ''
+  return Object.fromEntries(
+    raw.split(';').map(c => {
+      const eq = c.trim().indexOf('=')
+      if (eq === -1) return [decodeURIComponent(c.trim()), '']
+      return [decodeURIComponent(c.trim().slice(0, eq)), decodeURIComponent(c.trim().slice(eq + 1))]
+    })
+  )
+}
+
+function isAuthed(req) {
+  if (!LOCAL_TOKEN) return true // no token set = open access
+  const cookies = parseCookies(req)
+  return cookies['stream_token'] === LOCAL_TOKEN
+}
 
 function startLocalServer() {
   const server = http.createServer((req, res) => {
     // Only accept localhost
     const host = req.headers.host || ''
-    if (!host.startsWith('localhost') && !host.startsWith('127.')) {
+    if (host !== `localhost:${LOCAL_PORT}` && host !== `127.0.0.1:${LOCAL_PORT}`) {
       res.writeHead(403).end('Forbidden')
+      return
+    }
+
+    // Auth endpoint
+    if (req.method === 'POST' && req.url === '/auth') {
+      let body = ''
+      req.on('data', d => { body += d })
+      req.on('end', () => {
+        try {
+          const { token } = JSON.parse(body)
+          if (LOCAL_TOKEN && token === LOCAL_TOKEN) {
+            res.writeHead(200, {
+              'Set-Cookie': `stream_token=${LOCAL_TOKEN}; Path=/; HttpOnly; SameSite=Strict`,
+              'Content-Type': 'application/json'
+            })
+            res.end(JSON.stringify({ ok: true }))
+          } else {
+            res.writeHead(401).end('Unauthorized')
+          }
+        } catch { res.writeHead(400).end('Bad request') }
+      })
+      return
+    }
+
+    // Auth gate — redirect to login if not authed
+    if (!isAuthed(req)) {
+      if (req.url === '/' || req.url === '') {
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+        res.end(LOGIN_HTML)
+      } else {
+        res.writeHead(401).end('Unauthorized')
+      }
       return
     }
 
@@ -795,11 +1656,67 @@ function startLocalServer() {
           })
           writeCSV(rows)
           gitSync(`add: ${text.trim().slice(0, 40)}`).catch(() => {})
-          runProcessor()
+          runTier1Processor(newId, null, MY_JID).catch(e => console.error('[local]', e.message))
           console.log(`[local] Added #${newId}: "${text.trim()}"`)
 
           res.writeHead(200, { 'Content-Type': 'application/json' })
           res.end(JSON.stringify({ ok: true, id: newId }))
+        } catch (e) {
+          res.writeHead(500).end(e.message)
+        }
+      })
+      return
+    }
+
+    // GET /api/todos — return active todos as JSON
+    if (req.method === 'GET' && req.url === '/api/todos') {
+      try {
+        const rows = readCSV()
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify(rows))
+      } catch (e) {
+        res.writeHead(500).end(e.message)
+      }
+      return
+    }
+
+    // POST /api/updates — apply edits from the web UI
+    if (req.method === 'POST' && req.url === '/api/updates') {
+      let body = ''
+      req.on('data', d => { body += d })
+      req.on('end', () => {
+        try {
+          const { updates } = JSON.parse(body)
+          if (!Array.isArray(updates) || !updates.length) {
+            res.writeHead(400).end('updates must be a non-empty array')
+            return
+          }
+
+          const rows = readCSV()
+          let changed = 0
+
+          for (const upd of updates) {
+            const idx = rows.findIndex(r => r.id === String(upd.id))
+            if (idx === -1) continue
+            const allowed = ['raw_message','category','priority','reminder_at','reminder_sent','completed','completed_at','archived']
+            for (const key of allowed) {
+              if (upd[key] !== undefined) rows[idx][key] = upd[key]
+            }
+            // Auto-set completed_at when marking done
+            if (upd.completed === 'true' && !rows[idx].completed_at) {
+              rows[idx].completed_at = new Date().toISOString()
+            }
+            changed++
+          }
+
+          if (changed > 0) {
+            writeCSV(rows)
+            gitSync('updates from web').catch(() => {})
+            console.log(`[local] Applied ${changed} update(s) from web UI`)
+          }
+
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ ok: true, changed }))
         } catch (e) {
           res.writeHead(500).end(e.message)
         }
@@ -821,5 +1738,113 @@ setInterval(() => processOutbox().catch(console.error), 5000)
 setInterval(() => checkScheduled().catch(console.error), 30000)
 setInterval(() => checkCleanup().catch(console.error), 60000) // nightly at 11pm
 
+// ── Token keepalive ───────────────────────────────────────────
+// Runs claude.exe with a trivial prompt every 6 hours so it refreshes
+// the OAuth token to .credentials.json before it goes stale.
+// Uses the existing Claude.ai subscription — no API credits needed.
+
+let _tokenKeepaliveRunning = false
+
+async function refreshTokenViaClaude() {
+  if (_tokenKeepaliveRunning) return
+  // Don't fight the processor for the session
+  if (_processorRunning) { console.log('[token] Keepalive deferred — processor running'); return }
+  _tokenKeepaliveRunning = true
+  let claudeExe
+  try { claudeExe = findClaudeExe() }
+  catch (e) { console.error('[token] Keepalive skipped — claude.exe not found'); _tokenKeepaliveRunning = false; return }
+
+  console.log('[token] Running keepalive to refresh OAuth token...')
+  return new Promise(resolve => {
+    const proc = spawn(claudeExe, ['--print', 'ok'], {
+      cwd: __dirname, windowsHide: true,
+      stdio: 'ignore', env: process.env
+    })
+    const timeout = setTimeout(() => { try { proc.kill() } catch {} }, 60000)
+    proc.on('close', code => {
+      clearTimeout(timeout)
+      _tokenKeepaliveRunning = false
+      console.log(`[token] Keepalive done (exit ${code}) — OAuth token refreshed`)
+      resolve()
+    })
+    proc.on('error', e => {
+      clearTimeout(timeout)
+      _tokenKeepaliveRunning = false
+      console.error('[token] Keepalive failed:', e.message)
+      resolve()
+    })
+  })
+}
+
+// Proactive refresh every 6 hours — keeps token alive overnight without user intervention
+cron.schedule('0 */6 * * *', () => {
+  refreshTokenViaClaude().catch(e => console.error('[token] Keepalive cron error:', e.message))
+})
+
+// ── Tier 2: proactive heartbeat — every 20 minutes ────────────
+cron.schedule('*/20 * * * *', () => {
+  runTier2(async (text) => {
+    if (!sock) return
+    await smartSend(MY_JID, text)
+    storeLastBotMessage(text, null)
+  }).catch(e => console.error('[tier2]', e.message))
+})
+
+// ── Daily digest — 7:30am London time ────────────────────────
+cron.schedule('30 7 * * *', () => {
+  generateDailyDigest(async (text) => {
+    if (!sock) return
+    await smartSend(MY_JID, text)
+    storeLastBotMessage(text, null)
+  }).catch(e => console.error('[digest]', e.message))
+}, { timezone: 'Europe/London' })
+
+// Graceful shutdown — close WhatsApp socket before exiting so WA de-registers
+// the session immediately, preventing code 440 "conflict" on the next start.
+async function shutdown(signal) {
+  console.log(`[bot] ${signal} received — shutting down gracefully...`)
+  _reconnecting = true  // prevent reconnect attempts during shutdown
+  _wsConnected = false
+  if (sock) {
+    try { sock.end(undefined) } catch {}
+    sock = null
+  }
+  // Give the close signal 500ms to reach WA servers
+  await new Promise(r => setTimeout(r, 500))
+  console.log('[bot] Exiting.')
+  process.exit(0)
+}
+process.on('SIGTERM', () => shutdown('SIGTERM'))
+process.on('SIGINT',  () => shutdown('SIGINT'))
+
+// Prevent unknown async errors from crashing the process
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[bot] Unhandled rejection (not crashing):', reason?.message || reason)
+})
+process.on('uncaughtException', (err) => {
+  // Log but don't exit — PM2 would restart anyway, but staying alive is better
+  console.error('[bot] Uncaught exception (not crashing):', err.message)
+})
+
 startLocalServer()
 startBot().catch(console.error)
+
+// Refresh token immediately on startup if it's expired or expiring within 2 hours
+;(async () => {
+  const fs2 = fs
+  const os2 = os
+  try {
+    const credsPath = path.join(os2.homedir(), '.claude', '.credentials.json')
+    const creds = JSON.parse(fs2.readFileSync(credsPath, 'utf8'))
+    const expiresAt = creds?.claudeAiOauth?.expiresAt || 0
+    const hoursLeft = (expiresAt - Date.now()) / 3600000
+    if (hoursLeft < 2) {
+      console.log(`[token] Token expires in ${hoursLeft.toFixed(1)}h — running startup keepalive`)
+      await refreshTokenViaClaude()
+    } else {
+      console.log(`[token] Token OK — expires in ${hoursLeft.toFixed(1)}h`)
+    }
+  } catch (e) {
+    console.error('[token] Startup check failed:', e.message)
+  }
+})()
