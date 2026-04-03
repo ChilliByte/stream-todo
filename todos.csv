@@ -148,3 +148,4 @@ Log in profile MD to avoid repeating the same instruction to me sequentially, su
 "143","2026-04-03T14:55:02.701Z","Move home GPS coords to .env (not profile.md)","misc","low","false","","true","2026-04-03T14:55:02.701Z","false",""
 "144","2026-04-03T14:57:44.016Z","That's work. In env only","misc","low","false","","false","","false",""
 "145","2026-04-03T14:58:46.448Z","Then tell me how long the drive to work is right now","misc","low","false","","false","","false",""
+"146","2026-04-03T15:36:36.937Z","Update .env with work address","misc","low","false","","false","","false",""
