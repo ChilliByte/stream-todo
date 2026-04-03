@@ -113,5 +113,8 @@ Maybe some ice creams","misc","low","false","","true","2026-03-31T16:22:28.175Z"
 "112","2026-04-03T00:43:24.755Z","Log and return confirmation of you logging that I said:
 
 Log in profile MD to avoid repeating the same instruction to me sequentially, such as telling me to go to sleep","misc","high","false","","false","","false",""
-"113","2026-04-03T00:44:04.566Z","See, you lied to me. Why","","","true","","false","","false",""
-"114","2026-04-03T00:45:15.221Z","You didn't update the profile.md yet","","","true","","false","","false",""
+"113","2026-04-03T00:44:04.566Z","See, you lied to me. Why","misc","low","false","","false","","false",""
+"114","2026-04-03T00:45:15.221Z","You didn't update the profile.md yet","misc","low","false","","false","","false",""
+"115","2026-04-03T00:45:24.752Z","Log and return confirmation of you logging that I said:
+
+Log in profile MD to avoid repeating the same instruction to me sequentially, such as telling me to go to sleep","misc","low","false","","false","","false",""
