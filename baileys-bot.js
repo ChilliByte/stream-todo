@@ -4,7 +4,6 @@
  * sends outbound messages and reminders as voice notes.
  */
 
-import http from 'http'
 import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
@@ -19,28 +18,30 @@ import path from 'path'
 import os from 'os'
 import { fileURLToPath } from 'url'
 import dotenv from 'dotenv'
-import { parse } from 'csv-parse/sync'
-import { stringify } from 'csv-stringify/sync'
 import simpleGit from 'simple-git'
 import qrcode from 'qrcode-terminal'
 import { spawn, execSync } from 'child_process'
-import ffmpegInstaller from '@ffmpeg-installer/ffmpeg'
-import ffmpegLib from 'fluent-ffmpeg'
-import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts'
 import cron from 'node-cron'
 import { runTier1 } from './tier1.js'
 import { runTier2 } from './tier2.js'
 import { generateDailyDigest } from './digest.js'
 import { createEvent as gcalCreateEvent } from './gcal.js'
+import {
+  CSV_PATH, STATE_PATH, INBOX_PATH, OUTBOX_PATH,
+  readState, writeState,
+  readCSV, writeCSV, nextId,
+  readInbox, appendInbox, readOutbox, readJSON
+} from './db.js'
+import {
+  transcribeAudio,
+  sendVoice, smartSend,
+  storeLastBotMessage, appendHistory
+} from './audio.js'
+import { startLocalServer } from './server.js'
 
 dotenv.config()
-ffmpegLib.setFfmpegPath(ffmpegInstaller.path)
 
 const __dirname      = path.dirname(fileURLToPath(import.meta.url))
-const CSV_PATH       = path.join(__dirname, 'todos.csv')
-const STATE_PATH     = path.join(__dirname, 'state.json')
-const INBOX_PATH     = path.join(__dirname, 'inbox.json')
-const OUTBOX_PATH    = path.join(__dirname, 'outbox.json')
 const MSGKEYS_PATH   = path.join(__dirname, 'message_keys.json')
 const SCHEDULED_PATH = path.join(__dirname, 'scheduled.json')
 const AUTH_DIR        = path.join(__dirname, 'auth_info')
@@ -66,10 +67,7 @@ console.log('[bot] Whitelisted JIDs:', [...WHITELISTED_JIDS].join(', '))
 // Local server auth token — set LOCAL_TOKEN in .env to enable, otherwise open
 const LOCAL_TOKEN = process.env.LOCAL_TOKEN || null
 
-const GROQ_API_KEY = process.env.GROQ_API_KEY
-if (!GROQ_API_KEY) { console.error('GROQ_API_KEY not set in .env'); process.exit(1) }
-const EDGE_VOICE = process.env.EDGE_VOICE || 'en-GB-SoniaNeural'
-const VOICE_MIN_LENGTH = 30 // below this, always send text regardless of voice flag
+if (!process.env.GROQ_API_KEY) { console.error('GROQ_API_KEY not set in .env'); process.exit(1) }
 
 const git = simpleGit(__dirname)
 let sock = null
@@ -106,155 +104,12 @@ function findClaudeExe() {
   throw new Error('claude.exe not found — is Claude Code installed?')
 }
 
-// ── File helpers ──────────────────────────────────────────────
+// ── Thin wrappers that bind the global sock ───────────────────
+// audio.js exports sockRef-parameterised versions; these wrappers
+// supply the global sock so the rest of baileys-bot.js is unchanged.
 
-function readState() {
-  try { return JSON.parse(fs.readFileSync(STATE_PATH, 'utf8')) }
-  catch { return {} }
-}
-function writeState(s) { fs.writeFileSync(STATE_PATH, JSON.stringify(s, null, 2)) }
-
-function readCSV() {
-  const text = fs.readFileSync(CSV_PATH, 'utf8')
-  return parse(text, { columns: true, skip_empty_lines: true })
-}
-function writeCSV(rows) {
-  const out = stringify(rows, {
-    header: true, quoted_string: true,
-    columns: ['id','timestamp','raw_message','category','priority','new','reminder_at','completed','completed_at','archived','brief_file']
-  })
-  fs.writeFileSync(CSV_PATH, out)
-}
-function nextId(rows) {
-  if (!rows.length) return 1
-  return Math.max(...rows.map(r => parseInt(r.id) || 0)) + 1
-}
-
-function readInbox()  { try { return JSON.parse(fs.readFileSync(INBOX_PATH, 'utf8')) } catch { return [] } }
-function appendInbox(entry) { const i = readInbox(); i.push(entry); fs.writeFileSync(INBOX_PATH, JSON.stringify(i, null, 2)) }
-function readOutbox() { try { return JSON.parse(fs.readFileSync(OUTBOX_PATH, 'utf8')) } catch { return [] } }
-
-// ── Voice — transcription ─────────────────────────────────────
-
-async function transcribeAudio(audioBuffer) {
-  const blob = new Blob([audioBuffer], { type: 'audio/ogg; codecs=opus' })
-  const form = new FormData()
-  form.append('file', blob, 'audio.ogg')
-  form.append('model', 'whisper-large-v3-turbo')
-  form.append('language', 'en')
-  const res = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${GROQ_API_KEY}` },
-    body: form
-  })
-  if (!res.ok) throw new Error(`Groq STT ${res.status}: ${await res.text()}`)
-  return ((await res.json()).text || '').trim()
-}
-
-// ── Voice — synthesis ─────────────────────────────────────────
-// Uses Groq Orpheus TTS when available; falls back to Edge Neural TTS.
-// To enable Groq TTS: accept terms at console.groq.com/playground?model=canopylabs/orpheus-v1-english
-// then set GROQ_TTS=1 in .env
-
-const GROQ_TTS_ENABLED = process.env.GROQ_TTS === '1'
-const GROQ_TTS_VOICE   = process.env.GROQ_VOICE || 'tara'
-
-async function synthesizeSpeech(text) {
-  if (GROQ_TTS_ENABLED) {
-    const res = await fetch('https://api.groq.com/openai/v1/audio/speech', {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${GROQ_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'canopylabs/orpheus-v1-english',
-        input: text,
-        voice: GROQ_TTS_VOICE,
-        response_format: 'mp3'
-      })
-    })
-    if (!res.ok) throw new Error(`Groq TTS ${res.status}: ${await res.text()}`)
-    return Buffer.from(await res.arrayBuffer())
-  }
-
-  // Fallback: Edge Neural TTS
-  const tts = new MsEdgeTTS()
-  await tts.setMetadata(EDGE_VOICE, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3)
-  const { audioStream } = tts.toStream(text)
-  const chunks = []
-  return new Promise((resolve, reject) => {
-    audioStream.on('data',  c => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)))
-    audioStream.on('end',   () => resolve(Buffer.concat(chunks)))
-    audioStream.on('error', reject)
-  })
-}
-
-function mp3ToOpus(mp3Buffer) {
-  return new Promise((resolve, reject) => {
-    const tmpIn  = path.join(os.tmpdir(), `stream_in_${Date.now()}.mp3`)
-    const tmpOut = path.join(os.tmpdir(), `stream_out_${Date.now()}.ogg`)
-    fs.writeFileSync(tmpIn, mp3Buffer)
-    ffmpegLib(tmpIn)
-      .audioCodec('libopus').audioBitrate('32k').format('ogg').save(tmpOut)
-      .on('end', () => {
-        const r = fs.readFileSync(tmpOut)
-        try { fs.unlinkSync(tmpIn); fs.unlinkSync(tmpOut) } catch {}
-        resolve(r)
-      })
-      .on('error', err => {
-        try { fs.unlinkSync(tmpIn); fs.unlinkSync(tmpOut) } catch {}
-        reject(err)
-      })
-  })
-}
-
-async function sendVoice(jid, text) {
-  const mp3  = await synthesizeSpeech(text)
-  const opus = await mp3ToOpus(mp3)
-  await sock.sendMessage(jid, { audio: opus, mimetype: 'audio/ogg; codecs=opus', ptt: true })
-  console.log(`[voice] Sent: "${text.slice(0, 60)}"`)
-}
-
-// ── Smart send: voice only when meaningful ────────────────────
-
-async function smartSend(jid, text, forceTts = false) {
-  if (!text?.trim()) return // never send blank
-  const state    = readState()
-  const useVoice = (forceTts || state.last_was_voice) && text.length >= VOICE_MIN_LENGTH
-
-  // Store for "Done" context detection
-  storeLastBotMessage(text)
-
-  if (useVoice) {
-    try {
-      await sendVoice(jid, text)
-      if (state.last_was_voice) { state.last_was_voice = false; writeState(state) }
-      return
-    } catch (e) {
-      console.error('[voice] TTS failed, falling back to text:', e.message)
-    }
-  }
-  await sock.sendMessage(jid, { text })
-  console.log(`[bot] Sent text: "${text.slice(0, 60)}"`)
-}
-
-// ── Context — track last bot message for "Done" detection ─────
-
-const HISTORY_LIMIT = 15
-
-function appendHistory(role, text) {
-  if (!text?.trim()) return
-  const s = readState()
-  const history = s.conversation_history || []
-  history.push({ role, text: text.trim(), ts: new Date().toISOString() })
-  s.conversation_history = history.slice(-HISTORY_LIMIT)
-  writeState(s)
-}
-
-function storeLastBotMessage(text, todoId = null) {
-  const s = readState()
-  s.last_bot_message = { text, todo_id: todoId, sent_at: new Date().toISOString() }
-  writeState(s)
-  if (text?.trim()) appendHistory('assistant', text)
-}
+function _sendVoice(jid, text) { return sendVoice(jid, text, sock) }
+function _smartSend(jid, text, forceTts = false) { return smartSend(jid, text, sock, forceTts) }
 
 // Detect "Done", "did it", "ok", "sorted", etc.
 const COMPLETION_RE = /^(done|did it|yep|yeah|yea|ok|okay|got it|finished|sorted|complete[d]?|✅|👍)[\s!.]*$/i
@@ -564,12 +419,15 @@ async function runTier1Processor(newItemId, msg, jid) {
     // Clear inbox now that it's been processed
     fs.writeFileSync(INBOX_PATH, '[]')
 
-    // Merge Tier 1 schedules into scheduled.json
+    // Merge Tier 1 schedules into scheduled.json (dedup by todo_id to prevent double-reminders)
     if (result.schedule?.length) {
       const existing = readJSON(SCHEDULED_PATH, [])
-      const merged = [...existing, ...result.schedule]
-      fs.writeFileSync(SCHEDULED_PATH, JSON.stringify(merged, null, 2))
-      console.log(`[tier1] Scheduled ${result.schedule.length} reminder(s)`)
+      const existingIds = new Set(existing.map(e => e.todo_id).filter(Boolean))
+      const newEntries = result.schedule.filter(e => !e.todo_id || !existingIds.has(e.todo_id))
+      if (newEntries.length) {
+        fs.writeFileSync(SCHEDULED_PATH, JSON.stringify([...existing, ...newEntries], null, 2))
+        console.log(`[tier1] Scheduled ${newEntries.length} reminder(s)`)
+      }
     }
 
     // Send reply or react
@@ -595,19 +453,25 @@ async function runTier1Processor(newItemId, msg, jid) {
         }
         pendingHourglass.delete(id)
       }
-      await smartSend(jid || MY_JID, result.reply)
+      await _smartSend(jid || MY_JID, result.reply)
       clearTyping(jid || MY_JID)
       storeLastBotMessage(result.reply, newItemId)
     }
 
-    // Append profile_note directly to profile.md
+    // Append profile_note under ## Adaptive Notes section in profile.md
     if (result.profile_note?.trim()) {
       try {
         const profilePath = path.join(__dirname, 'profile.md')
         const existing = fs.existsSync(profilePath) ? fs.readFileSync(profilePath, 'utf8') : ''
         const date = new Date().toLocaleDateString('en-GB', { timeZone: 'Europe/London' })
-        const note = `\n- ${result.profile_note.trim()} (${date})`
-        fs.appendFileSync(profilePath, note)
+        const note = `- ${result.profile_note.trim()} (${date})`
+        let updated
+        if (existing.includes('## Adaptive Notes')) {
+          updated = existing.replace('## Adaptive Notes', `## Adaptive Notes\n${note}`)
+        } else {
+          updated = existing.trimEnd() + `\n\n## Adaptive Notes\n${note}\n`
+        }
+        fs.writeFileSync(profilePath, updated)
         console.log(`[tier1] profile_note appended: ${result.profile_note.slice(0, 60)}`)
       } catch (e) {
         console.error('[tier1] Failed to write profile_note:', e.message)
@@ -650,10 +514,6 @@ async function runTier1Processor(newItemId, msg, jid) {
   }
 }
 
-function readJSON(filePath, fallback) {
-  try { return JSON.parse(fs.readFileSync(filePath, 'utf8')) }
-  catch { return fallback }
-}
 
 // ── Legacy Tier 3 processor (claude.exe — research & proactive) ──
 
@@ -768,7 +628,7 @@ async function recoverMissedReminders() {
     const ageMs = now - sendAt
     if (sendAt <= now && ageMs <= 30 * 60 * 1000) {
       try {
-        await smartSend(MY_JID, `(Missed) ${entry.text}`)
+        await _smartSend(MY_JID, `(Missed) ${entry.text}`)
         if (entry.todo_id) storeLastBotMessage(entry.text, entry.todo_id)
         recovered++
       } catch (e) {
@@ -961,11 +821,11 @@ async function processOutbox() {
           const event   = await gcalCreateEvent({ title: msg.title, start: msg.start, end: endTime, description: msg.description || '' })
           const day     = new Date(msg.start).toLocaleDateString('en-GB', { timeZone: 'Europe/London', weekday: 'short', day: 'numeric', month: 'short' })
           const time    = new Date(msg.start).toLocaleTimeString('en-GB', { timeZone: 'Europe/London', hour: '2-digit', minute: '2-digit' })
-          await smartSend(MY_JID, `📅 Added to calendar — ${msg.title}, ${day} at ${time}`)
+          await _smartSend(MY_JID, `📅 Added to calendar — ${msg.title}, ${day} at ${time}`)
           console.log(`[gcal] Event created: ${msg.title}`)
         } catch (e) {
           console.error('[gcal] Failed to create event:', e.message)
-          await smartSend(MY_JID, `Couldn't add to calendar — ${e.message.includes('token') ? 'run: node gcal.js setup' : e.message}`)
+          await _smartSend(MY_JID, `Couldn't add to calendar — ${e.message.includes('token') ? 'run: node gcal.js setup' : e.message}`)
         }
       } else if (msg.type === 'react') {
         let keys = {}
@@ -995,7 +855,7 @@ async function processOutbox() {
           pendingHourglass.delete(id)
         }
 
-        await smartSend(jid, msg.text)
+        await _smartSend(jid, msg.text)
         clearTyping(jid)
         if (msg.pending_question_item_id) {
           const s = readState()
@@ -1033,7 +893,7 @@ async function checkScheduled() {
     if (sendAt <= now && sendAt > new Date(now - 15 * 60 * 1000)) {
       if (!sock || !_wsConnected) { remaining.push(entry); continue }  // re-guard (race condition)
       try {
-        await smartSend(MY_JID, entry.text)
+        await _smartSend(MY_JID, entry.text)
         if (entry.todo_id) storeLastBotMessage(entry.text, entry.todo_id)
         changed = true
       } catch (e) {
@@ -1118,6 +978,11 @@ async function startBot() {
   const seenMsgIds = new Set(st.seen_msg_ids || [])
   function markSeen(id) {
     seenMsgIds.add(id)
+    // Trim in-memory Set to prevent unbounded growth in long sessions
+    if (seenMsgIds.size > 600) {
+      const arr = [...seenMsgIds]
+      arr.slice(0, arr.length - 500).forEach(old => seenMsgIds.delete(old))
+    }
     const s = readState(); s.seen_msg_ids = [...seenMsgIds].slice(-500); writeState(s)
   }
 
@@ -1214,525 +1079,6 @@ async function startBot() {
   console.log('[bot] claude.exe:', findClaudeExe())
 }
 
-// ── Local web server (localhost:3001) ─────────────────────────
-
-const LOCAL_PORT = 3001
-
-const LOCAL_HTML = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Stream</title>
-<style>
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-    background:#f5f5f8;min-height:100vh;padding:24px}
-  .wrap{max-width:680px;margin:0 auto}
-  h1{font-size:18px;font-weight:700;color:#111;margin-bottom:2px}
-  .sub{font-size:12px;color:#999;margin-bottom:20px}
-
-  /* Add card */
-  .card{background:#fff;border-radius:12px;box-shadow:0 2px 12px rgba(0,0,0,.07);
-    padding:20px 24px;margin-bottom:20px}
-  textarea{width:100%;border:1px solid #e0e0e9;border-radius:8px;padding:10px 12px;
-    font-family:inherit;font-size:14px;resize:none;height:72px;outline:none;
-    transition:border .15s;color:#111}
-  textarea:focus{border-color:#2563eb;box-shadow:0 0 0 3px rgba(37,99,235,.1)}
-  .add-btn{margin-top:10px;background:#2563eb;color:#fff;border:none;
-    border-radius:8px;padding:9px 18px;font-size:14px;font-weight:500;cursor:pointer;
-    transition:background .15s}
-  .add-btn:hover{background:#1d4ed8}
-  .add-btn:disabled{background:#93c5fd;cursor:default}
-  .toast{display:none;margin-top:10px;padding:8px 12px;border-radius:8px;font-size:13px}
-  .toast.ok{background:#dcfce7;color:#166534;display:block}
-  .toast.err{background:#fee2e2;color:#991b1b;display:block}
-
-  /* Filters */
-  .filters{display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap;align-items:center}
-  .filters select,.filters input{border:1px solid #e0e0e9;border-radius:6px;padding:5px 9px;
-    font-size:13px;background:#fff;outline:none;color:#333}
-  .filters input{flex:1;min-width:120px}
-  .count{font-size:12px;color:#999;margin-left:auto}
-
-  /* Todo list */
-  .todo-list{display:flex;flex-direction:column;gap:8px}
-  .todo{background:#fff;border-radius:10px;padding:12px 16px;
-    box-shadow:0 1px 4px rgba(0,0,0,.06);display:flex;gap:12px;align-items:flex-start;
-    border-left:3px solid transparent;transition:opacity .2s}
-  .todo.pri-high{border-left-color:#ef4444}
-  .todo.pri-normal{border-left-color:#3b82f6}
-  .todo.pri-low{border-left-color:#d1d5db}
-  .todo.completed{opacity:.45}
-  .todo-check{width:18px;height:18px;accent-color:#2563eb;margin-top:2px;flex-shrink:0;cursor:pointer}
-  .todo-body{flex:1;min-width:0}
-  .todo-msg{font-size:14px;color:#111;line-height:1.4;word-break:break-word}
-  .todo-meta{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap;align-items:center}
-  .badge{font-size:11px;padding:2px 7px;border-radius:4px;font-weight:500}
-  .badge-cat{background:#eff6ff;color:#1d4ed8}
-  .badge-pri-high{background:#fef2f2;color:#b91c1c}
-  .badge-pri-normal{background:#f0f9ff;color:#0369a1}
-  .badge-pri-low{background:#f9fafb;color:#6b7280}
-  .badge-reminder{background:#fefce8;color:#854d0e}
-  .badge-id{background:#f3f4f6;color:#9ca3af;font-size:10px}
-  .todo-actions{display:flex;gap:6px;flex-shrink:0}
-  .btn-icon{background:none;border:1px solid #e5e7eb;border-radius:6px;
-    padding:4px 8px;font-size:12px;cursor:pointer;color:#6b7280;
-    transition:all .15s;white-space:nowrap}
-  .btn-icon:hover{background:#f3f4f6;color:#111}
-  .btn-icon.danger:hover{background:#fee2e2;border-color:#fca5a5;color:#dc2626}
-
-  /* Edit modal */
-  .modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.4);
-    z-index:100;align-items:center;justify-content:center}
-  .modal-bg.open{display:flex}
-  .modal{background:#fff;border-radius:14px;padding:24px 28px;width:100%;max-width:460px;
-    box-shadow:0 8px 40px rgba(0,0,0,.18)}
-  .modal h2{font-size:15px;font-weight:600;margin-bottom:16px}
-  .field{margin-bottom:14px}
-  .field label{display:block;font-size:12px;color:#666;margin-bottom:4px;font-weight:500}
-  .field input,.field select,.field textarea{width:100%;border:1px solid #e0e0e9;border-radius:7px;
-    padding:8px 11px;font-size:13px;font-family:inherit;outline:none;color:#111}
-  .field input:focus,.field select:focus,.field textarea:focus{border-color:#2563eb}
-  .field textarea{resize:vertical;min-height:60px}
-  .modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
-  .btn-save{background:#2563eb;color:#fff;border:none;border-radius:7px;
-    padding:8px 18px;font-size:13px;font-weight:500;cursor:pointer}
-  .btn-save:hover{background:#1d4ed8}
-  .btn-cancel{background:#f3f4f6;color:#374151;border:none;border-radius:7px;
-    padding:8px 14px;font-size:13px;cursor:pointer}
-  .btn-cancel:hover{background:#e5e7eb}
-
-  .loading{text-align:center;color:#999;padding:32px;font-size:14px}
-  .empty{text-align:center;color:#bbb;padding:32px;font-size:14px}
-</style>
-</head>
-<body>
-<div class="wrap">
-  <h1>Stream</h1>
-  <div class="sub">Deep's task list</div>
-
-  <!-- Add form -->
-  <div class="card">
-    <textarea id="addText" placeholder="Get milk on the way home&#10;Meeting with Arjun Thursday 3pm&#10;Find a good book on Indian independence"></textarea>
-    <button class="add-btn" id="addBtn" onclick="addItem()">Add</button>
-    <div class="toast" id="addToast"></div>
-  </div>
-
-  <!-- Filters -->
-  <div class="filters">
-    <input id="search" placeholder="Search…" oninput="renderList()" />
-    <select id="catFilter" onchange="renderList()">
-      <option value="">All categories</option>
-      <option>errands</option><option>books</option>
-      <option>india-rci</option><option>creative</option><option>misc</option>
-    </select>
-    <select id="priFilter" onchange="renderList()">
-      <option value="">All priorities</option>
-      <option>high</option><option>normal</option><option>low</option>
-    </select>
-    <select id="showFilter" onchange="renderList()">
-      <option value="active">Active</option>
-      <option value="all">All incl. done</option>
-      <option value="completed">Completed</option>
-    </select>
-    <span class="count" id="count"></span>
-  </div>
-
-  <!-- List -->
-  <div class="todo-list" id="list"><div class="loading">Loading…</div></div>
-</div>
-
-<!-- Edit modal -->
-<div class="modal-bg" id="modalBg" onclick="if(event.target===this)closeModal()">
-  <div class="modal">
-    <h2>Edit task</h2>
-    <div class="field"><label>Task</label>
-      <textarea id="eMsg" rows="2"></textarea></div>
-    <div class="field"><label>Category</label>
-      <select id="eCat">
-        <option>errands</option><option>books</option>
-        <option>india-rci</option><option>creative</option><option>misc</option>
-      </select></div>
-    <div class="field"><label>Priority</label>
-      <select id="ePri">
-        <option>high</option><option>normal</option><option>low</option>
-      </select></div>
-    <div class="field"><label>Reminder (leave blank to clear)</label>
-      <input type="datetime-local" id="eReminder"/></div>
-    <div class="modal-actions">
-      <button class="btn-cancel" onclick="closeModal()">Cancel</button>
-      <button class="btn-save" onclick="saveEdit()">Save</button>
-    </div>
-  </div>
-</div>
-
-<script>
-  let todos = []
-  let editId = null
-  const addText = document.getElementById('addText')
-
-  addText.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) addItem()
-  })
-
-  async function load() {
-    try {
-      const r = await fetch('/api/todos')
-      if (!r.ok) throw new Error(r.status)
-      todos = await r.json()
-      renderList()
-    } catch(e) {
-      document.getElementById('list').innerHTML = '<div class="empty">Failed to load — ' + e.message + '</div>'
-    }
-  }
-
-  function renderList() {
-    const search  = document.getElementById('search').value.toLowerCase()
-    const cat     = document.getElementById('catFilter').value
-    const pri     = document.getElementById('priFilter').value
-    const show    = document.getElementById('showFilter').value
-
-    let filtered = todos.filter(t => {
-      if (show === 'active'    && (t.completed === 'true' || t.archived === 'true')) return false
-      if (show === 'completed' && t.completed !== 'true') return false
-      if (cat && t.category !== cat) return false
-      if (pri && t.priority !== pri) return false
-      if (search && !t.raw_message?.toLowerCase().includes(search)) return false
-      return true
-    })
-
-    // Sort: high first, then by id desc
-    filtered.sort((a, b) => {
-      const pOrd = {high:0,normal:1,low:2}
-      const pd = (pOrd[a.priority]||1) - (pOrd[b.priority]||1)
-      return pd !== 0 ? pd : Number(b.id) - Number(a.id)
-    })
-
-    document.getElementById('count').textContent = filtered.length + ' item' + (filtered.length !== 1 ? 's' : '')
-
-    if (!filtered.length) {
-      document.getElementById('list').innerHTML = '<div class="empty">Nothing here</div>'
-      return
-    }
-
-    document.getElementById('list').innerHTML = filtered.map(t => {
-      const done = t.completed === 'true'
-      const pri  = t.priority || 'normal'
-      let reminder = ''
-      if (t.reminder_at) {
-        try {
-          const d = new Date(t.reminder_at)
-          reminder = '<span class="badge badge-reminder">⏰ ' + d.toLocaleString('en-GB',{timeZone:'Europe/London',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) + '</span>'
-        } catch {}
-      }
-      return \`<div class="todo pri-\${pri} \${done?'completed':''}" id="row-\${t.id}">
-        <input type="checkbox" class="todo-check" \${done?'checked':''} onchange="toggleDone('\${t.id}',this.checked)" title="Mark done"/>
-        <div class="todo-body">
-          <div class="todo-msg">\${esc(t.raw_message || '')}</div>
-          <div class="todo-meta">
-            <span class="badge badge-id">#\${t.id}</span>
-            \${t.category ? '<span class="badge badge-cat">'+esc(t.category)+'</span>' : ''}
-            \${t.priority ? '<span class="badge badge-pri-'+pri+'">'+pri+'</span>' : ''}
-            \${reminder}
-          </div>
-        </div>
-        <div class="todo-actions">
-          <button class="btn-icon" onclick="openEdit('\${t.id}')" title="Edit">Edit</button>
-          <button class="btn-icon danger" onclick="archiveItem('\${t.id}')" title="Archive">Archive</button>
-        </div>
-      </div>\`
-    }).join('')
-  }
-
-  function esc(s) {
-    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')
-  }
-
-  async function addItem() {
-    const text = addText.value.trim()
-    if (!text) return
-    const btn = document.getElementById('addBtn')
-    const toast = document.getElementById('addToast')
-    btn.disabled = true; btn.textContent = 'Adding…'
-    toast.className = 'toast'
-    try {
-      const r = await fetch('/add', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({text})})
-      if (!r.ok) throw new Error(await r.text())
-      toast.textContent = '✓ Added — processing…'; toast.className = 'toast ok'
-      addText.value = ''
-      setTimeout(load, 1500) // reload after processor has a moment
-    } catch(e) {
-      toast.textContent = 'Error: ' + e.message; toast.className = 'toast err'
-    }
-    btn.disabled = false; btn.textContent = 'Add'
-  }
-
-  async function toggleDone(id, checked) {
-    await applyUpdate({ id, completed: checked ? 'true' : 'false', completed_at: checked ? new Date().toISOString() : '' })
-  }
-
-  async function archiveItem(id) {
-    if (!confirm('Archive this item?')) return
-    await applyUpdate({ id, archived: 'true' })
-  }
-
-  function openEdit(id) {
-    const t = todos.find(x => x.id === id)
-    if (!t) return
-    editId = id
-    document.getElementById('eMsg').value = t.raw_message || ''
-    document.getElementById('eCat').value = t.category || 'misc'
-    document.getElementById('ePri').value = t.priority || 'normal'
-    if (t.reminder_at) {
-      try {
-        const d = new Date(t.reminder_at)
-        // datetime-local expects YYYY-MM-DDTHH:MM in local time
-        const pad = n => String(n).padStart(2,'0')
-        document.getElementById('eReminder').value =
-          d.getFullYear() + '-' + pad(d.getMonth()+1) + '-' + pad(d.getDate()) +
-          'T' + pad(d.getHours()) + ':' + pad(d.getMinutes())
-      } catch { document.getElementById('eReminder').value = '' }
-    } else {
-      document.getElementById('eReminder').value = ''
-    }
-    document.getElementById('modalBg').classList.add('open')
-    document.getElementById('eMsg').focus()
-  }
-
-  function closeModal() {
-    document.getElementById('modalBg').classList.remove('open')
-    editId = null
-  }
-
-  async function saveEdit() {
-    if (!editId) return
-    const reminderRaw = document.getElementById('eReminder').value
-    const reminder_at = reminderRaw ? new Date(reminderRaw).toISOString() : ''
-    await applyUpdate({
-      id: editId,
-      raw_message: document.getElementById('eMsg').value.trim(),
-      category:    document.getElementById('eCat').value,
-      priority:    document.getElementById('ePri').value,
-      reminder_at
-    })
-    closeModal()
-  }
-
-  async function applyUpdate(update) {
-    try {
-      const r = await fetch('/api/updates', {
-        method: 'POST',
-        headers: {'Content-Type':'application/json'},
-        body: JSON.stringify({ updates: [update] })
-      })
-      if (!r.ok) throw new Error(await r.text())
-      await load()
-    } catch(e) {
-      alert('Save failed: ' + e.message)
-    }
-  }
-
-  // Poll every 30s to catch bot-side changes
-  load()
-  setInterval(load, 30000)
-</script>
-</body>
-</html>`
-
-const LOGIN_HTML = `<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Stream — Login</title>
-<style>
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-    background:#f5f5f8;display:flex;align-items:center;justify-content:center;min-height:100vh}
-  .card{background:#fff;border-radius:12px;box-shadow:0 2px 16px rgba(0,0,0,.08);
-    padding:28px 32px;width:100%;max-width:360px}
-  h1{font-size:16px;font-weight:600;color:#111;margin-bottom:16px}
-  input{width:100%;border:1px solid #e0e0e9;border-radius:8px;padding:10px 14px;
-    font-size:14px;outline:none;margin-bottom:12px}
-  input:focus{border-color:#2563eb}
-  button{width:100%;background:#2563eb;color:#fff;border:none;border-radius:8px;
-    padding:11px;font-size:14px;font-weight:500;cursor:pointer}
-  button:hover{background:#1d4ed8}
-  .err{color:#991b1b;font-size:13px;margin-top:8px;display:none}
-</style></head>
-<body><div class="card">
-  <h1>Stream</h1>
-  <input type="password" id="t" placeholder="Access token" autofocus/>
-  <button onclick="login()">Enter</button>
-  <div class="err" id="e">Wrong token</div>
-</div>
-<script>
-  document.getElementById('t').addEventListener('keydown', e => { if(e.key==='Enter') login() })
-  async function login() {
-    const token = document.getElementById('t').value
-    const r = await fetch('/auth', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token})})
-    if (r.ok) { location.href='/' } else { document.getElementById('e').style.display='block' }
-  }
-</script></body></html>`
-
-function parseCookies(req) {
-  const raw = req.headers.cookie || ''
-  return Object.fromEntries(
-    raw.split(';').map(c => {
-      const eq = c.trim().indexOf('=')
-      if (eq === -1) return [decodeURIComponent(c.trim()), '']
-      return [decodeURIComponent(c.trim().slice(0, eq)), decodeURIComponent(c.trim().slice(eq + 1))]
-    })
-  )
-}
-
-function isAuthed(req) {
-  if (!LOCAL_TOKEN) return true // no token set = open access
-  const cookies = parseCookies(req)
-  return cookies['stream_token'] === LOCAL_TOKEN
-}
-
-function startLocalServer() {
-  const server = http.createServer((req, res) => {
-    // Only accept localhost
-    const host = req.headers.host || ''
-    if (host !== `localhost:${LOCAL_PORT}` && host !== `127.0.0.1:${LOCAL_PORT}`) {
-      res.writeHead(403).end('Forbidden')
-      return
-    }
-
-    // Auth endpoint
-    if (req.method === 'POST' && req.url === '/auth') {
-      let body = ''
-      req.on('data', d => { body += d })
-      req.on('end', () => {
-        try {
-          const { token } = JSON.parse(body)
-          if (LOCAL_TOKEN && token === LOCAL_TOKEN) {
-            res.writeHead(200, {
-              'Set-Cookie': `stream_token=${LOCAL_TOKEN}; Path=/; HttpOnly; SameSite=Strict`,
-              'Content-Type': 'application/json'
-            })
-            res.end(JSON.stringify({ ok: true }))
-          } else {
-            res.writeHead(401).end('Unauthorized')
-          }
-        } catch { res.writeHead(400).end('Bad request') }
-      })
-      return
-    }
-
-    // Auth gate — redirect to login if not authed
-    if (!isAuthed(req)) {
-      if (req.url === '/' || req.url === '') {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-        res.end(LOGIN_HTML)
-      } else {
-        res.writeHead(401).end('Unauthorized')
-      }
-      return
-    }
-
-    if (req.method === 'GET' && req.url === '/') {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
-      res.end(LOCAL_HTML)
-      return
-    }
-
-    if (req.method === 'POST' && req.url === '/add') {
-      let body = ''
-      req.on('data', d => { body += d })
-      req.on('end', () => {
-        try {
-          const { text } = JSON.parse(body)
-          if (!text?.trim()) { res.writeHead(400).end('No text'); return }
-
-          // Write to CSV and trigger processor — same path as WhatsApp messages
-          const rows  = readCSV()
-          const newId = String(nextId(rows))
-          rows.push({
-            id: newId, timestamp: new Date().toISOString(), raw_message: text.trim(),
-            category: '', priority: '', new: 'true', reminder_at: '',
-            completed: 'false', completed_at: '', archived: 'false', brief_file: ''
-          })
-          writeCSV(rows)
-          gitSync(`add: ${text.trim().slice(0, 40)}`).catch(() => {})
-          runTier1Processor(newId, null, MY_JID).catch(e => console.error('[local]', e.message))
-          console.log(`[local] Added #${newId}: "${text.trim()}"`)
-
-          res.writeHead(200, { 'Content-Type': 'application/json' })
-          res.end(JSON.stringify({ ok: true, id: newId }))
-        } catch (e) {
-          res.writeHead(500).end(e.message)
-        }
-      })
-      return
-    }
-
-    // GET /api/todos — return active todos as JSON
-    if (req.method === 'GET' && req.url === '/api/todos') {
-      try {
-        const rows = readCSV()
-        res.writeHead(200, { 'Content-Type': 'application/json' })
-        res.end(JSON.stringify(rows))
-      } catch (e) {
-        res.writeHead(500).end(e.message)
-      }
-      return
-    }
-
-    // POST /api/updates — apply edits from the web UI
-    if (req.method === 'POST' && req.url === '/api/updates') {
-      let body = ''
-      req.on('data', d => { body += d })
-      req.on('end', () => {
-        try {
-          const { updates } = JSON.parse(body)
-          if (!Array.isArray(updates) || !updates.length) {
-            res.writeHead(400).end('updates must be a non-empty array')
-            return
-          }
-
-          const rows = readCSV()
-          let changed = 0
-
-          for (const upd of updates) {
-            const idx = rows.findIndex(r => r.id === String(upd.id))
-            if (idx === -1) continue
-            const allowed = ['raw_message','category','priority','reminder_at','reminder_sent','completed','completed_at','archived']
-            for (const key of allowed) {
-              if (upd[key] !== undefined) rows[idx][key] = upd[key]
-            }
-            // Auto-set completed_at when marking done
-            if (upd.completed === 'true' && !rows[idx].completed_at) {
-              rows[idx].completed_at = new Date().toISOString()
-            }
-            changed++
-          }
-
-          if (changed > 0) {
-            writeCSV(rows)
-            gitSync('updates from web').catch(() => {})
-            console.log(`[local] Applied ${changed} update(s) from web UI`)
-          }
-
-          res.writeHead(200, { 'Content-Type': 'application/json' })
-          res.end(JSON.stringify({ ok: true, changed }))
-        } catch (e) {
-          res.writeHead(500).end(e.message)
-        }
-      })
-      return
-    }
-
-    res.writeHead(404).end('Not found')
-  })
-
-  server.listen(LOCAL_PORT, '127.0.0.1', () => {
-    console.log(`[local] Server running at http://localhost:${LOCAL_PORT}`)
-  })
-  server.on('error', e => console.error('[local]', e.message))
-}
-
 // Safety-net polling (file watcher is primary, this catches edge cases)
 setInterval(() => processOutbox().catch(console.error), 5000)
 setInterval(() => checkScheduled().catch(console.error), 30000)
@@ -1785,7 +1131,7 @@ cron.schedule('0 */6 * * *', () => {
 cron.schedule('*/20 * * * *', () => {
   runTier2(async (text) => {
     if (!sock) return
-    await smartSend(MY_JID, text)
+    await _smartSend(MY_JID, text)
     storeLastBotMessage(text, null)
   }).catch(e => console.error('[tier2]', e.message))
 })
@@ -1794,7 +1140,7 @@ cron.schedule('*/20 * * * *', () => {
 cron.schedule('30 7 * * *', () => {
   generateDailyDigest(async (text) => {
     if (!sock) return
-    await smartSend(MY_JID, text)
+    await _smartSend(MY_JID, text)
     storeLastBotMessage(text, null)
   }).catch(e => console.error('[digest]', e.message))
 }, { timezone: 'Europe/London' })
@@ -1826,7 +1172,7 @@ process.on('uncaughtException', (err) => {
   console.error('[bot] Uncaught exception (not crashing):', err.message)
 })
 
-startLocalServer()
+startLocalServer(runTier1Processor, gitSync)
 startBot().catch(console.error)
 
 // Refresh token immediately on startup if it's expired or expiring within 2 hours
