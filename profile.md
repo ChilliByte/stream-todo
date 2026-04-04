@@ -146,5 +146,6 @@ He had no previous task management system — just working memory. The purpose o
 - Jujutsu — watch for him to raise it
 
 ## Adaptive Notes
+- Location override: Greyson's house (saved to .env) (04/04/2026)
 - [03/04/2026] ✗ negative (re: "Got it—sounds like the system's picking up noise. We'll clea") — "No, don't do that. You do what I say. Note that in profile.md and then go clean " (1x observed)
 - [03/04/2026] Security: sensitive/precise data (GPS coords, credentials, tokens) belongs in .env, not profile.md. This includes work-related config. Profile.md may be committed to git — keep it clean of PII.
