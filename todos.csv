@@ -173,3 +173,6 @@ Log in profile MD to avoid repeating the same instruction to me sequentially, su
 "168","2026-04-03T23:15:57.535Z","Also delete the Poundland item","misc","low","false","","true","2026-04-03T23:15:58.000Z","true",""
 "169","2026-04-03T23:20:03.678Z","Done?","misc","low","false","","true","2026-04-04T00:20:00.000Z","true",""
 "170","2026-04-03T23:21:20.678Z","Seems like there's like 10 empty items on the misc section, and two bugged items with NaN timestamp","misc","low","false","","true","2026-04-04T00:21:00.000Z","true",""
+"171","2026-04-04T10:11:36.584Z","Hey tier 1, what's the weather like","misc","normal","false","","false","","false",""
+"172","2026-04-04T10:12:09.996Z","I'm driving to Stevenage, anything I should know?","misc","low","false","","false","","false",""
+"173","2026-04-04T11:12:38.766Z","I'm doing a106,M11,M25, a1m probably. Maybe A10 through harlow","misc","low","false","","false","","false",""
