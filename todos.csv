@@ -196,3 +196,4 @@ Log in profile MD to avoid repeating the same instruction to me sequentially, su
 "191","2026-04-05T21:02:40.684Z","Can you put the Jatin thing onto my calendar","misc","normal","false","","true","2026-04-05T23:00:00.000Z","true",""
 "192","2026-04-05T21:02:54.054Z","On Google calendar I mean","misc","normal","false","","true","2026-04-05T23:00:00.000Z","true",""
 "193","2026-04-06T20:52:04.222Z","Can you fetch a longer Trotsky quote and send it here as a voice note","creative","normal","false","","true","2026-04-06T20:52:00.000Z","false","briefs/193.json"
+"194","2026-04-06T20:54:58.816Z","Can you use groq and reply as a voice note","misc","normal","false","","false","","false",""
