@@ -1,22 +1,7 @@
 [
   {
-    "text": "📋 Send the amendments",
-    "send_at": "2026-04-14T09:35:00",
-    "todo_id": "73"
-  },
-  {
-    "text": "📰 District paper sale today at 1pm",
-    "send_at": "2026-04-12T10:00:00",
-    "todo_id": "74"
-  },
-  {
-    "text": "Aldi on your way home from work.",
-    "send_at": "2026-04-07T17:00:00.000Z",
-    "todo_id": null
-  },
-  {
-    "text": "Call with Jatin in 30 minutes — ch 27-9 discussion",
-    "send_at": "2026-04-15T13:00:00.000Z",
-    "todo_id": "190"
+    "text": "Jatin call prep reminder — you've got chapters 27 to 29 to read before Friday's 1pm call",
+    "send_at": "2026-04-17T12:30:00.000Z",
+    "todo_id": "200"
   }
 ]
