@@ -214,3 +214,4 @@ Log in profile MD to avoid repeating the same instruction to me sequentially, su
 "205","2026-04-16T14:20:38.106Z","clear 75 120 199","misc","low","false","","true","2026-04-16T14:21:30.000Z","true",""
 "206","2026-04-16T14:21:02.492Z","clear 75, 120, 199","misc","low","false","","true","2026-04-16T14:21:30.000Z","true",""
 "207","2026-04-16T14:22:19.152Z","clear misc","misc","normal","false","","true","2026-04-16T14:21:30.000Z","true",""
+"208","2026-04-16T14:25:54.979Z","help","misc","low","false","","true","2026-04-16T14:26:08.967Z","true",""
