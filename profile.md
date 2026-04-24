@@ -151,3 +151,4 @@ He had no previous task management system — just working memory. The purpose o
 - [03/04/2026] Security: sensitive/precise data (GPS coords, credentials, tokens) belongs in .env, not profile.md. This includes work-related config. Profile.md may be committed to git — keep it clean of PII.
 
 - [21 Apr 2026] don't call me mate
+- [24 Apr 2026] don't message during commute
